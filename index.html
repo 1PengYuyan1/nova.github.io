@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>个人主页 · 首页 / 博客 / 随笔 / 画廊 / 留言 / 关于</title>
+  <meta name="description" content="高级暗黑流体毛玻璃个人展示空间。" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap"
+    rel="stylesheet"
+  />
+  <link rel="stylesheet" href="./styles.css?v=20261120" />
+  <script>
+    (function () {
+      const saved = localStorage.getItem('obsidian-glass-theme');
+      if (saved === 'light') {
+        document.documentElement.classList.remove('dark');
+      } else {
+        document.documentElement.classList.add('dark');
+      }
+    })();
+  </script>
+</head>
+<body>
+  <!-- 黑曜石流体液态光影背景 -->
+  <div class="ambient-bg" aria-hidden="true">
+    <div class="fluid-blob blob-1"></div>
+    <div class="fluid-blob blob-2"></div>
+    <div class="fluid-blob blob-3"></div>
+    <div class="fluid-blob blob-4"></div>
+    <div class="noise-layer"></div>
+  </div>
+
+  <!-- 悬浮透明流体毛玻璃胶囊导航栏（首页 / 博客 / 随笔 / 画廊 / 留言 / 关于） -->
+  <header class="floating-nav-wrap">
+    <div class="floating-nav liquid-glass">
+      <a href="#home" class="nav-brand" data-nav="home">
+        <span class="brand-chip">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.1">
+            <circle cx="12" cy="12" r="4"></circle>
+            <path d="M12 2v3M12 19v3M2 12h3M19 12h3"></path>
+          </svg>
+        </span>
+        <span id="nav-brand-name">My Space</span>
+      </a>
+
+      <nav class="nav-pills" aria-label="主导航">
+        <a href="#home" class="nav-pill active" data-nav="home">首页</a>
+        <a href="#blog" class="nav-pill" data-nav="blog">博客</a>
+        <a href="#essays" class="nav-pill" data-nav="essays">随笔</a>
+        <a href="#gallery" class="nav-pill" data-nav="gallery">画廊</a>
+        <a href="#guestbook" class="nav-pill" data-nav="guestbook">留言</a>
+        <a href="#about" class="nav-pill" data-nav="about">关于</a>
+      </nav>
+
+      <div class="nav-tools">
+        <button class="glass-icon-btn" id="theme-toggle" aria-label="切换暗黑或浅色毛玻璃" title="切换暗黑 / 浅色毛玻璃">
+          <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+            <circle cx="12" cy="12" r="4"></circle>
+            <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path>
+          </svg>
+          <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+            <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path>
+          </svg>
+        </button>
+
+        <button class="glass-icon-btn mobile-toggle" id="mobile-menu-btn" aria-label="展开导航">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <path d="M4 7h16M4 12h16M4 17h16"></path>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="mobile-sheet liquid-glass" id="mobile-drawer">
+      <a href="#home" class="mobile-pill active" data-nav="home">首页</a>
+      <a href="#blog" class="mobile-pill" data-nav="blog">博客</a>
+      <a href="#essays" class="mobile-pill" data-nav="essays">随笔</a>
+      <a href="#gallery" class="mobile-pill" data-nav="gallery">画廊</a>
+      <a href="#guestbook" class="mobile-pill" data-nav="guestbook">留言</a>
+      <a href="#about" class="mobile-pill" data-nav="about">关于</a>
+    </div>
+  </header>
+
+  <main id="app-main"></main>
+
+  <footer class="footer-wrap">
+    <div class="container">
+      <div class="footer-glass liquid-glass">
+        <div class="footer-top">
+          <div class="footer-intro">
+            <div class="nav-brand">
+              <span class="brand-chip">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.1">
+                  <circle cx="12" cy="12" r="4"></circle>
+                  <path d="M12 2v3M12 19v3M2 12h3M19 12h3"></path>
+                </svg>
+              </span>
+              <span id="footer-brand-name">My Space</span>
+            </div>
+            <p id="footer-bio"></p>
+          </div>
+
+          <div class="footer-cols">
+            <div>
+              <h4>空间目录</h4>
+              <ul>
+                <li><a href="#home">首页</a></li>
+                <li><a href="#blog">博客</a></li>
+                <li><a href="#essays">随笔</a></li>
+                <li><a href="#gallery">画廊</a></li>
+                <li><a href="#guestbook">留言</a></li>
+                <li><a href="#about">关于</a></li>
+              </ul>
+            </div>
+
+            <div>
+              <h4>链接</h4>
+              <ul id="footer-socials"></ul>
+            </div>
+
+            <div>
+              <h4>保持联系</h4>
+              <p class="footer-hint" id="footer-contact-hint">后续可在 data.js 中填入你的邮箱或社交账号。</p>
+              <button class="btn btn-liquid btn-sm" id="copy-email-btn" style="display:none;">
+                <span id="footer-email-text"></span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="footer-bottom">
+          <span id="footer-copyright"></span>
+          <span class="mono-footnote">PERSONAL SPACE · OBSIDIAN LIQUID GLASS</span>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <!-- 详情阅读流体毛玻璃弹窗 -->
+  <div class="modal-backdrop" id="reader-modal" aria-hidden="true">
+    <div class="modal-window liquid-glass" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <div class="window-bar">
+        <div class="window-dots" aria-hidden="true">
+          <span class="dot dot-1"></span>
+          <span class="dot dot-2"></span>
+          <span class="dot dot-3"></span>
+        </div>
+        <div class="window-meta" id="modal-meta-bar"></div>
+        <button class="glass-icon-btn btn-close-sm" id="modal-close" aria-label="关闭窗口">✕</button>
+      </div>
+      <div class="modal-scroll" id="modal-body"></div>
+    </div>
+  </div>
+
+  <!-- 画廊全屏液态玻璃灯箱 -->
+  <div class="lightbox" id="lightbox" aria-hidden="true">
+    <button class="lightbox-ctrl lb-close" id="lightbox-close" aria-label="关闭">✕</button>
+    <button class="lightbox-ctrl lb-prev" id="lightbox-prev" aria-label="上一张">‹</button>
+    <figure class="lightbox-figure">
+      <img id="lightbox-img" src="" alt="" />
+      <figcaption class="lightbox-bar liquid-glass">
+        <strong id="lightbox-title"></strong>
+        <span id="lightbox-sub"></span>
+      </figcaption>
+    </figure>
+    <button class="lightbox-ctrl lb-next" id="lightbox-next" aria-label="下一张">›</button>
+  </div>
+
+  <div class="toast liquid-glass" id="toast" role="status" aria-live="polite"></div>
+
+  <script src="./data.js?v=20261120"></script>
+  <script src="./app.js?v=20261120"></script>
+</body>
+</html>

@@ -1,0 +1,1087 @@
+/**
+ * 个人展示空间核心渲染脚本
+ * 目录：首页(#home) / 博客(#blog) / 随笔(#essays) / 画廊(#gallery) / 留言(#guestbook) / 关于(#about)
+ */
+(function () {
+  const data = window.SITE_DATA;
+  const appMain = document.getElementById('app-main');
+  const modal = document.getElementById('reader-modal');
+  const modalBody = document.getElementById('modal-body');
+  const modalMetaBar = document.getElementById('modal-meta-bar');
+  const lightbox = document.getElementById('lightbox');
+  const toastEl = document.getElementById('toast');
+
+  const GUESTBOOK_STORAGE_KEY = 'obsidian-space-guestbook-v1';
+
+  let currentRoute = 'home';
+  let activeBlogTag = '全部';
+  let blogQuery = '';
+  let activeEssayCat = '全部';
+  let activeGalleryCat = '全部';
+  let lightboxList = [];
+  let lightboxIndex = 0;
+
+  let canvasRaf = null;
+  let typewriterTimer = null;
+
+  /* ========================================================================
+     1. 工具函数
+     ======================================================================== */
+  function escapeHtml(str) {
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
+  function estimateReadMins(text) {
+    return Math.max(1, Math.ceil(text.replace(/\s+/g, '').length / 320));
+  }
+
+  function renderMarkdown(md) {
+    const lines = md.trim().split('\n');
+    let html = '';
+    let inCode = false;
+    let codeBuf = [];
+    let inList = false;
+    let listTag = 'ul';
+
+    const closeList = () => {
+      if (inList) {
+        html += `</${listTag}>`;
+        inList = false;
+      }
+    };
+
+    const inline = (s) =>
+      escapeHtml(s)
+        .replace(/`([^`]+)`/g, '<code>$1</code>')
+        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+        .replace(
+          /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+          '<a href="$2" target="_blank" rel="noopener noreferrer" style="color:var(--accent-champagne);text-decoration:underline;">$1</a>'
+        );
+
+    for (const raw of lines) {
+      const line = raw.trimEnd();
+      if (line.trim().startsWith('```')) {
+        closeList();
+        if (!inCode) {
+          inCode = true;
+          codeBuf = [];
+        } else {
+          html += `<pre><code>${escapeHtml(codeBuf.join('\n'))}</code></pre>`;
+          inCode = false;
+        }
+        continue;
+      }
+      if (inCode) {
+        codeBuf.push(raw);
+        continue;
+      }
+      if (!line.trim()) {
+        closeList();
+        continue;
+      }
+      if (line.startsWith('### ')) {
+        closeList();
+        html += `<h3>${inline(line.slice(4))}</h3>`;
+      } else if (line.startsWith('## ')) {
+        closeList();
+        html += `<h2>${inline(line.slice(3))}</h2>`;
+      } else if (line.startsWith('# ')) {
+        closeList();
+        html += `<h1>${inline(line.slice(2))}</h1>`;
+      } else if (line.startsWith('> ')) {
+        closeList();
+        html += `<blockquote>${inline(line.slice(2))}</blockquote>`;
+      } else if (/^[-*] /.test(line.trim())) {
+        if (!inList || listTag !== 'ul') {
+          closeList();
+          listTag = 'ul';
+          inList = true;
+          html += '<ul>';
+        }
+        html += `<li>${inline(line.trim().slice(2))}</li>`;
+      } else if (/^\d+\. /.test(line.trim())) {
+        if (!inList || listTag !== 'ol') {
+          closeList();
+          listTag = 'ol';
+          inList = true;
+          html += '<ol>';
+        }
+        html += `<li>${inline(line.trim().replace(/^\d+\.\s+/, ''))}</li>`;
+      } else {
+        closeList();
+        html += `<p>${inline(line)}</p>`;
+      }
+    }
+    closeList();
+    return html;
+  }
+
+  let toastTimer = null;
+  function showToast(msg) {
+    toastEl.textContent = msg;
+    toastEl.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toastEl.classList.remove('show'), 2300);
+  }
+
+  function loadGuestbookMessages() {
+    let localItems = [];
+    try {
+      const raw = localStorage.getItem(GUESTBOOK_STORAGE_KEY);
+      if (raw) localItems = JSON.parse(raw);
+    } catch {
+      localItems = [];
+    }
+    return [...localItems, ...(data.guestbook || [])];
+  }
+
+  function saveGuestbookMessage(entry) {
+    try {
+      const raw = localStorage.getItem(GUESTBOOK_STORAGE_KEY);
+      const list = raw ? JSON.parse(raw) : [];
+      list.unshift(entry);
+      localStorage.setItem(GUESTBOOK_STORAGE_KEY, JSON.stringify(list));
+    } catch {
+      data.guestbook.unshift(entry);
+    }
+  }
+
+  function bindGlassGlint() {
+    document.querySelectorAll('.liquid-glass').forEach((el) => {
+      if (el.dataset.glintBound) return;
+      el.dataset.glintBound = '1';
+      el.addEventListener('pointermove', (e) => {
+        const rect = el.getBoundingClientRect();
+        const x = ((e.clientX - rect.left) / rect.width) * 100;
+        const y = ((e.clientY - rect.top) / rect.height) * 100;
+        el.style.setProperty('--mx', `${x.toFixed(1)}%`);
+        el.style.setProperty('--my', `${y.toFixed(1)}%`);
+      });
+    });
+  }
+
+  /* ========================================================================
+     2. 初始化导航与页脚
+     ======================================================================== */
+  function initShell() {
+    document.getElementById('nav-brand-name').textContent = data.profile.brandName;
+    document.getElementById('footer-brand-name').textContent = data.profile.brandName;
+    document.getElementById('footer-bio').textContent = data.profile.bio;
+    document.getElementById('footer-copyright').textContent =
+      `© ${new Date().getFullYear()} ${data.profile.brandName}`;
+
+    const socialsEl = document.getElementById('footer-socials');
+    if (data.profile.socials && data.profile.socials.length) {
+      socialsEl.innerHTML = data.profile.socials
+        .map(
+          (s) =>
+            `<li><a href="${s.url}" target="_blank" rel="noopener noreferrer">${escapeHtml(s.label)}</a></li>`
+        )
+        .join('');
+    } else {
+      socialsEl.innerHTML = `<li style="color:var(--text-muted);font-size:0.84rem;">暂未配置外链</li>`;
+    }
+
+    const emailBtn = document.getElementById('copy-email-btn');
+    const emailText = document.getElementById('footer-email-text');
+    const contactHint = document.getElementById('footer-contact-hint');
+    if (data.profile.email) {
+      emailBtn.style.display = 'inline-flex';
+      emailText.textContent = data.profile.email;
+      contactHint.textContent = '点击下方按钮可快速复制联系邮箱。';
+      emailBtn.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(data.profile.email);
+          showToast(`已复制邮箱：${data.profile.email}`);
+        } catch {
+          showToast(`联系邮箱：${data.profile.email}`);
+        }
+      });
+    }
+
+    document.getElementById('theme-toggle').addEventListener('click', () => {
+      const isDark = document.documentElement.classList.toggle('dark');
+      try {
+        localStorage.setItem('obsidian-glass-theme', isDark ? 'dark' : 'light');
+      } catch {}
+      showToast(isDark ? '已切换至黑曜石暗黑玻璃' : '已切换至白银雾面浅色玻璃');
+    });
+
+    const mobileDrawer = document.getElementById('mobile-drawer');
+    document.getElementById('mobile-menu-btn').addEventListener('click', () => {
+      mobileDrawer.classList.toggle('open');
+    });
+
+    document.getElementById('modal-close').addEventListener('click', closeModal);
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) closeModal();
+    });
+
+    document.getElementById('lightbox-close').addEventListener('click', closeLightbox);
+    document.getElementById('lightbox-prev').addEventListener('click', () => stepLightbox(-1));
+    document.getElementById('lightbox-next').addEventListener('click', () => stepLightbox(1));
+    lightbox.addEventListener('click', (e) => {
+      if (e.target === lightbox) closeLightbox();
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (lightbox.classList.contains('open')) {
+        if (e.key === 'Escape') closeLightbox();
+        if (e.key === 'ArrowLeft') stepLightbox(-1);
+        if (e.key === 'ArrowRight') stepLightbox(1);
+      } else if (modal.classList.contains('open') && e.key === 'Escape') {
+        closeModal();
+      }
+    });
+
+    bindGlassGlint();
+  }
+
+  /* ========================================================================
+     3. 卡片片段
+     ======================================================================== */
+  function blogCardHTML(post) {
+    const mins = estimateReadMins(post.content || '');
+    return `
+      <article class="blog-card liquid-glass glass-interactive" data-open-post="${post.id}">
+        <div>
+          <div class="blog-meta">
+            <span>${escapeHtml(post.date || '')}</span>
+            <span>·</span>
+            <span>约 ${mins} 分钟阅读</span>
+          </div>
+          <h3 class="blog-title">${escapeHtml(post.title)}</h3>
+          <p class="blog-excerpt">${escapeHtml(post.excerpt || '')}</p>
+        </div>
+        <div class="chip-row">
+          ${(post.tags || []).map((t) => `<span class="chip">#${escapeHtml(t)}</span>`).join('')}
+        </div>
+      </article>
+    `;
+  }
+
+  function essayCardHTML(essay, showPhoto) {
+    return `
+      <article class="essay-card liquid-glass glass-interactive">
+        <div class="essay-top">
+          <span>${escapeHtml(essay.date || '')}</span>
+          ${essay.mood ? `<span class="essay-mood">${escapeHtml(essay.mood)}</span>` : ''}
+        </div>
+        <p class="essay-text">${escapeHtml(essay.text || '')}</p>
+        ${
+          showPhoto && essay.image
+            ? `<img class="essay-photo" src="${essay.image}" alt="${escapeHtml(essay.mood || '随笔配图')}" data-essay-img="${essay.id}" loading="lazy" />`
+            : ''
+        }
+        <div class="essay-foot">
+          <span>${escapeHtml(essay.location || '')}</span>
+          ${essay.category ? `<span>#${escapeHtml(essay.category)}</span>` : ''}
+        </div>
+      </article>
+    `;
+  }
+
+  function photoCardHTML(item, idx) {
+    return `
+      <figure class="photo-card liquid-glass glass-interactive" data-open-lightbox="${idx}">
+        <div class="photo-frame">
+          <img src="${item.src}" alt="${escapeHtml(item.title || '')}" loading="lazy" />
+        </div>
+        <figcaption class="photo-meta">
+          <div class="photo-title">${escapeHtml(item.title || '')}</div>
+          <div class="photo-sub">
+            <span>${escapeHtml(item.location || '')}</span>
+            <span>${escapeHtml(item.date || '')}</span>
+          </div>
+        </figcaption>
+      </figure>
+    `;
+  }
+
+  /* ========================================================================
+     4. 开屏动效：双轨道点阵 + 打字机
+     ======================================================================== */
+  function stopHomeEffects() {
+    if (canvasRaf) {
+      cancelAnimationFrame(canvasRaf);
+      canvasRaf = null;
+    }
+    if (typewriterTimer) {
+      clearTimeout(typewriterTimer);
+      typewriterTimer = null;
+    }
+  }
+
+  function startHeroTypewriter(phrases) {
+    const el = document.getElementById('hero-typewriter');
+    if (!el || !phrases.length) return;
+    let pIdx = 0;
+    let cIdx = 0;
+    let deleting = false;
+
+    function step() {
+      const text = phrases[pIdx];
+      if (!deleting) {
+        cIdx++;
+        el.textContent = text.slice(0, cIdx);
+        if (cIdx === text.length) {
+          deleting = true;
+          typewriterTimer = setTimeout(step, 1850);
+          return;
+        }
+        typewriterTimer = setTimeout(step, 85);
+      } else {
+        cIdx--;
+        el.textContent = text.slice(0, cIdx);
+        if (cIdx === 0) {
+          deleting = false;
+          pIdx = (pIdx + 1) % phrases.length;
+          typewriterTimer = setTimeout(step, 340);
+          return;
+        }
+        typewriterTimer = setTimeout(step, 42);
+      }
+    }
+    step();
+  }
+
+  function startKineticCanvas() {
+    const canvas = document.getElementById('hero-canvas');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    let w = 0;
+    let h = 0;
+    let angle = 0;
+
+    function resize() {
+      w = canvas.width = canvas.offsetWidth;
+      h = canvas.height = canvas.offsetHeight;
+    }
+    resize();
+    window.addEventListener('resize', resize);
+
+    const stars = Array.from({ length: 48 }, () => ({
+      x: Math.random(),
+      y: Math.random(),
+      r: Math.random() * 1.4 + 0.5,
+      sp: Math.random() * 0.00025 + 0.0001,
+      warm: Math.random() > 0.65,
+    }));
+
+    function draw() {
+      ctx.clearRect(0, 0, w, h);
+      const dark = document.documentElement.classList.contains('dark');
+      const cx = w * 0.5;
+      const cy = h * 0.5;
+      const baseR = Math.min(w, h) * 0.34;
+      angle += 0.0022;
+
+      ctx.save();
+      ctx.translate(cx, cy);
+      for (let i = 0; i < 2; i++) {
+        ctx.beginPath();
+        const rx = baseR * (1 + i * 0.36);
+        const ry = rx * (i === 0 ? 0.42 : 0.56);
+        ctx.rotate(i === 0 ? 0.18 : -0.26);
+        ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+        ctx.strokeStyle = dark
+          ? `rgba(214, 190, 155, ${i === 0 ? 0.10 : 0.06})`
+          : `rgba(20, 20, 19, ${i === 0 ? 0.08 : 0.05})`;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        const px = Math.cos(angle * (i === 0 ? 1.2 : -0.85)) * rx;
+        const py = Math.sin(angle * (i === 0 ? 1.2 : -0.85)) * ry;
+        ctx.beginPath();
+        ctx.arc(px, py, 2.6, 0, Math.PI * 2);
+        ctx.fillStyle = dark ? 'rgba(214, 190, 155, 0.72)' : 'rgba(156, 126, 84, 0.7)';
+        ctx.fill();
+      }
+      ctx.restore();
+
+      for (const s of stars) {
+        s.y -= s.sp;
+        if (s.y < 0) s.y = 1;
+        ctx.beginPath();
+        ctx.arc(s.x * w, s.y * h, s.r, 0, Math.PI * 2);
+        if (dark) {
+          ctx.fillStyle = s.warm ? 'rgba(214, 190, 155, 0.36)' : 'rgba(245, 244, 240, 0.24)';
+        } else {
+          ctx.fillStyle = s.warm ? 'rgba(156, 126, 84, 0.26)' : 'rgba(20, 20, 19, 0.14)';
+        }
+        ctx.fill();
+      }
+
+      canvasRaf = requestAnimationFrame(draw);
+    }
+
+    draw();
+  }
+
+  /* ========================================================================
+     5. 六大页面：首页 / 博客 / 随笔 / 画廊 / 留言 / 关于
+     ======================================================================== */
+  function renderHome() {
+    const p = data.profile;
+    const gbCount = loadGuestbookMessages().length;
+    lightboxList = data.gallery.slice(0, 4);
+
+    const extraSections = [];
+
+    if (data.posts.length) {
+      extraSections.push(`
+        <section class="section">
+          <div class="container">
+            <div class="section-header">
+              <div>
+                <div class="kicker">Blog</div>
+                <h2 class="section-title">最新博客</h2>
+              </div>
+              <a href="#blog" class="section-link">查看全部 →</a>
+            </div>
+            <div class="blog-grid">${data.posts.slice(0, 4).map(blogCardHTML).join('')}</div>
+          </div>
+        </section>
+      `);
+    }
+
+    if (data.essays.length) {
+      extraSections.push(`
+        <section class="section">
+          <div class="container">
+            <div class="section-header">
+              <div>
+                <div class="kicker">Essays</div>
+                <h2 class="section-title">近期随笔</h2>
+              </div>
+              <a href="#essays" class="section-link">进入随笔 →</a>
+            </div>
+            <div class="essays-preview-grid">${data.essays.slice(0, 3).map((e) => essayCardHTML(e, false)).join('')}</div>
+          </div>
+        </section>
+      `);
+    }
+
+    if (data.gallery.length) {
+      extraSections.push(`
+        <section class="section">
+          <div class="container">
+            <div class="section-header">
+              <div>
+                <div class="kicker">Gallery</div>
+                <h2 class="section-title">画廊精选</h2>
+              </div>
+              <a href="#gallery" class="section-link">进入画廊 →</a>
+            </div>
+            <div class="gallery-strip">${lightboxList.map((item, idx) => photoCardHTML(item, idx)).join('')}</div>
+          </div>
+        </section>
+      `);
+    }
+
+    appMain.innerHTML = `
+      <!-- 第一屏：100vh 居中大气开屏 -->
+      <section class="hero-stage">
+        <canvas class="hero-canvas" id="hero-canvas"></canvas>
+
+        <div class="hero-center">
+          <span class="status-pill">
+            <span class="led-dot"></span>
+            ${escapeHtml(p.statusBadge)}
+          </span>
+
+          <h1 class="hero-display">
+            ${escapeHtml(p.heroGreeting)}<br />
+            <span class="metallic">${escapeHtml(p.heroName)}</span>
+          </h1>
+
+          <div class="hero-rotating">
+            <span>${escapeHtml(p.heroPrefix)}</span>
+            <span class="hero-rotating-highlight"><span id="hero-typewriter"></span><span class="cursor-bar"></span></span>
+          </div>
+
+          <p class="hero-subline">${escapeHtml(p.heroSubline)}</p>
+
+          <div class="hero-actions">
+            <a href="#blog" class="btn btn-primary">阅读博客 →</a>
+            <a href="#gallery" class="btn btn-liquid">探索画廊</a>
+            <a href="#guestbook" class="btn btn-liquid">给我留言</a>
+          </div>
+        </div>
+
+        <a href="#spaces-anchor" class="scroll-cue" id="scroll-down-btn">
+          <span>向下滚动</span>
+          <span class="scroll-line"></span>
+        </a>
+      </section>
+
+      <!-- 第二屏：流体透明毛玻璃空间导航入口 -->
+      <section class="section" id="spaces-anchor">
+        <div class="container">
+          <div class="section-header">
+            <div>
+              <div class="kicker">Directory</div>
+              <h2 class="section-title">探索空间</h2>
+            </div>
+          </div>
+
+          <div class="bento-strip">
+            <a href="#blog" class="bento-tile liquid-glass glass-interactive">
+              <div class="kicker">01 · Blog</div>
+              <div class="bento-tile-title">博客</div>
+              <p>沉淀思考、技术笔记与深度长文。</p>
+              <div style="display:flex;justify-content:space-between;align-items:center;">
+                <span class="chip">${data.posts.length} 篇文章</span>
+                <span style="color:var(--accent-champagne);font-size:0.84rem;">进入 →</span>
+              </div>
+            </a>
+
+            <a href="#essays" class="bento-tile liquid-glass glass-interactive">
+              <div class="kicker">02 · Essays</div>
+              <div class="bento-tile-title">随笔</div>
+              <p>记录日常片段、灵感与心情。</p>
+              <div style="display:flex;justify-content:space-between;align-items:center;">
+                <span class="chip">${data.essays.length} 条随笔</span>
+                <span style="color:var(--accent-champagne);font-size:0.84rem;">进入 →</span>
+              </div>
+            </a>
+
+            <a href="#gallery" class="bento-tile liquid-glass glass-interactive">
+              <div class="kicker">03 · Gallery</div>
+              <div class="bento-tile-title">画廊</div>
+              <p>用光影定格风景与生活切片。</p>
+              <div style="display:flex;justify-content:space-between;align-items:center;">
+                <span class="chip">${data.gallery.length} 张照片</span>
+                <span style="color:var(--accent-champagne);font-size:0.84rem;">进入 →</span>
+              </div>
+            </a>
+          </div>
+
+          <div class="blog-grid" style="margin-top:20px;">
+            <a href="#guestbook" class="bento-tile liquid-glass glass-interactive">
+              <div class="kicker">04 · Guestbook</div>
+              <div class="bento-tile-title">留言</div>
+              <p>路过留下一句话，分享想法或打个招呼。</p>
+              <div style="display:flex;justify-content:space-between;align-items:center;">
+                <span class="chip">${gbCount} 条留言</span>
+                <span style="color:var(--accent-champagne);font-size:0.84rem;">去留言 →</span>
+              </div>
+            </a>
+
+            <a href="#about" class="bento-tile liquid-glass glass-interactive">
+              <div class="kicker">05 · About</div>
+              <div class="bento-tile-title">关于</div>
+              <p>了解这个个人空间的缘起与主人介绍。</p>
+              <div style="display:flex;justify-content:space-between;align-items:center;">
+                <span class="chip">About Me</span>
+                <span style="color:var(--accent-champagne);font-size:0.84rem;">查看 →</span>
+              </div>
+            </a>
+          </div>
+        </div>
+      </section>
+
+      ${extraSections.join('')}
+    `;
+
+    const scrollBtn = document.getElementById('scroll-down-btn');
+    if (scrollBtn) {
+      scrollBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        document.getElementById('spaces-anchor')?.scrollIntoView({ behavior: 'smooth' });
+      });
+    }
+
+    startKineticCanvas();
+    startHeroTypewriter(p.heroPhrases);
+    bindContentTriggers();
+    bindGlassGlint();
+  }
+
+  function renderBlogPage() {
+    if (!data.posts.length) {
+      appMain.innerHTML = `
+        <section class="page-hero">
+          <div class="container">
+            <div class="page-hero-card liquid-glass">
+              <div>
+                <div class="kicker">Blog</div>
+                <h1>博客</h1>
+                <p>沉淀思考、记录探索与深度长文。</p>
+              </div>
+              <span class="chip">0 篇文章</span>
+            </div>
+          </div>
+        </section>
+        <section class="section">
+          <div class="container">
+            <div class="empty-state-box liquid-glass">
+              <h3>暂未发布文章</h3>
+              <p>后续在 <code>data.js</code> 的 <code>posts</code> 数组中添加 Markdown 文章，即可自动支持搜索、标签筛选与阅读弹窗。</p>
+              <a href="#home" class="btn btn-liquid btn-sm">返回首页 →</a>
+            </div>
+          </div>
+        </section>
+      `;
+      bindGlassGlint();
+      return;
+    }
+
+    const tags = ['全部', ...new Set(data.posts.flatMap((p) => p.tags || []))];
+    const q = blogQuery.trim().toLowerCase();
+    const filtered = data.posts.filter((post) => {
+      const okTag = activeBlogTag === '全部' || (post.tags || []).includes(activeBlogTag);
+      const okQ =
+        !q ||
+        post.title.toLowerCase().includes(q) ||
+        (post.excerpt || '').toLowerCase().includes(q) ||
+        (post.content || '').toLowerCase().includes(q);
+      return okTag && okQ;
+    });
+
+    appMain.innerHTML = `
+      <section class="page-hero">
+        <div class="container">
+          <div class="page-hero-card liquid-glass">
+            <div>
+              <div class="kicker">Blog</div>
+              <h1>博客</h1>
+              <p>记录探索与思考。</p>
+            </div>
+            <span class="chip">共 ${filtered.length} 篇文章</span>
+          </div>
+        </div>
+      </section>
+      <section class="section">
+        <div class="container">
+          <div class="toolbar">
+            <div class="filter-group">
+              ${tags
+                .map(
+                  (t) =>
+                    `<button class="filter-pill ${t === activeBlogTag ? 'active' : ''}" data-btag="${escapeHtml(t)}">${escapeHtml(t)}</button>`
+                )
+                .join('')}
+            </div>
+            <input type="search" class="search-box" id="blog-search" placeholder="搜索文章或关键词..." value="${escapeHtml(blogQuery)}" />
+          </div>
+          ${
+            filtered.length
+              ? `<div class="blog-grid">${filtered.map(blogCardHTML).join('')}</div>`
+              : `<div class="empty-state liquid-glass">没有找到匹配的文章。</div>`
+          }
+        </div>
+      </section>
+    `;
+
+    document.querySelectorAll('[data-btag]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        activeBlogTag = btn.getAttribute('data-btag');
+        renderBlogPage();
+      });
+    });
+
+    const input = document.getElementById('blog-search');
+    input.addEventListener('input', (e) => {
+      blogQuery = e.target.value;
+      const pos = input.selectionStart;
+      renderBlogPage();
+      const el = document.getElementById('blog-search');
+      el.focus();
+      el.setSelectionRange(pos, pos);
+    });
+
+    bindContentTriggers();
+    bindGlassGlint();
+  }
+
+  function renderEssaysPage() {
+    if (!data.essays.length) {
+      appMain.innerHTML = `
+        <section class="page-hero">
+          <div class="container">
+            <div class="page-hero-card liquid-glass">
+              <div>
+                <div class="kicker">Essays</div>
+                <h1>随笔</h1>
+                <p>自由记录日常片段、心情与灵感。</p>
+              </div>
+              <span class="chip">0 条随笔</span>
+            </div>
+          </div>
+        </section>
+        <section class="section">
+          <div class="container">
+            <div class="empty-state-box liquid-glass">
+              <h3>暂未发布随笔</h3>
+              <p>后续在 <code>data.js</code> 的 <code>essays</code> 数组中写下你的随笔，支持附带时间、地点、心情与照片。</p>
+              <a href="#home" class="btn btn-liquid btn-sm">返回首页 →</a>
+            </div>
+          </div>
+        </section>
+      `;
+      bindGlassGlint();
+      return;
+    }
+
+    const cats = ['全部', ...new Set(data.essays.map((e) => e.category || '随笔'))];
+    const filtered =
+      activeEssayCat === '全部'
+        ? data.essays
+        : data.essays.filter((e) => (e.category || '随笔') === activeEssayCat);
+
+    lightboxList = filtered
+      .filter((e) => e.image)
+      .map((e) => ({
+        id: e.id,
+        title: e.mood || '随笔配图',
+        location: e.location || '',
+        date: e.date || '',
+        camera: e.category || '',
+        src: e.image,
+      }));
+
+    appMain.innerHTML = `
+      <section class="page-hero">
+        <div class="container">
+          <div class="page-hero-card liquid-glass">
+            <div>
+              <div class="kicker">Essays</div>
+              <h1>随笔</h1>
+              <p>记录日常碎片与想法。</p>
+            </div>
+            <span class="chip">共 ${filtered.length} 条随笔</span>
+          </div>
+        </div>
+      </section>
+      <section class="section">
+        <div class="container">
+          <div class="toolbar">
+            <div class="filter-group">
+              ${cats
+                .map(
+                  (c) =>
+                    `<button class="filter-pill ${c === activeEssayCat ? 'active' : ''}" data-ecat="${escapeHtml(c)}">${escapeHtml(c)}</button>`
+                )
+                .join('')}
+            </div>
+          </div>
+          <div class="essays-feed">${filtered.map((e) => essayCardHTML(e, true)).join('')}</div>
+        </div>
+      </section>
+    `;
+
+    document.querySelectorAll('[data-ecat]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        activeEssayCat = btn.getAttribute('data-ecat');
+        renderEssaysPage();
+      });
+    });
+
+    document.querySelectorAll('[data-essay-img]').forEach((img) => {
+      img.addEventListener('click', () => {
+        const id = img.getAttribute('data-essay-img');
+        const idx = lightboxList.findIndex((x) => x.id === id);
+        if (idx >= 0) openLightbox(idx);
+      });
+    });
+
+    bindGlassGlint();
+  }
+
+  function renderGalleryPage() {
+    if (!data.gallery.length) {
+      appMain.innerHTML = `
+        <section class="page-hero">
+          <div class="container">
+            <div class="page-hero-card liquid-glass">
+              <div>
+                <div class="kicker">Gallery</div>
+                <h1>画廊</h1>
+                <p>收藏旅途风景、生活照片与值得记住的光影。</p>
+              </div>
+              <span class="chip">0 张照片</span>
+            </div>
+          </div>
+        </section>
+        <section class="section">
+          <div class="container">
+            <div class="empty-state-box liquid-glass">
+              <h3>暂未上传照片</h3>
+              <p>将照片放入 <code>assets/images/</code> 并在 <code>data.js</code> 的 <code>gallery</code> 数组中登记后，即可自动展示画廊与全屏灯箱。</p>
+              <a href="#home" class="btn btn-liquid btn-sm">返回首页 →</a>
+            </div>
+          </div>
+        </section>
+      `;
+      bindGlassGlint();
+      return;
+    }
+
+    const cats = ['全部', ...new Set(data.gallery.map((g) => g.category || '照片'))];
+    const filtered =
+      activeGalleryCat === '全部'
+        ? data.gallery
+        : data.gallery.filter((g) => (g.category || '照片') === activeGalleryCat);
+    lightboxList = filtered;
+
+    appMain.innerHTML = `
+      <section class="page-hero">
+        <div class="container">
+          <div class="page-hero-card liquid-glass">
+            <div>
+              <div class="kicker">Gallery</div>
+              <h1>画廊</h1>
+              <p>点击任意照片全屏欣赏，支持键盘左右切换。</p>
+            </div>
+            <span class="chip">共 ${filtered.length} 张照片</span>
+          </div>
+        </div>
+      </section>
+      <section class="section">
+        <div class="container">
+          <div class="toolbar">
+            <div class="filter-group">
+              ${cats
+                .map(
+                  (c) =>
+                    `<button class="filter-pill ${c === activeGalleryCat ? 'active' : ''}" data-gcat="${escapeHtml(c)}">${escapeHtml(c)}</button>`
+                )
+                .join('')}
+            </div>
+          </div>
+          <div class="gallery-grid">${filtered.map((item, idx) => photoCardHTML(item, idx)).join('')}</div>
+        </div>
+      </section>
+    `;
+
+    document.querySelectorAll('[data-gcat]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        activeGalleryCat = btn.getAttribute('data-gcat');
+        renderGalleryPage();
+      });
+    });
+
+    bindContentTriggers();
+    bindGlassGlint();
+  }
+
+  function renderGuestbookPage() {
+    const messages = loadGuestbookMessages();
+
+    appMain.innerHTML = `
+      <section class="page-hero">
+        <div class="container">
+          <div class="page-hero-card liquid-glass">
+            <div>
+              <div class="kicker">Guestbook</div>
+              <h1>留言</h1>
+              <p>欢迎在这里留下足迹、想法或一句问候。</p>
+            </div>
+            <span class="chip">共 ${messages.length} 条留言</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="container guestbook-layout">
+          <form class="guestbook-form liquid-glass" id="guestbook-form">
+            <h3>写下你的留言</h3>
+            <input class="glass-input" id="gb-name" type="text" placeholder="你的昵称" maxlength="32" required />
+            <textarea class="glass-textarea" id="gb-text" placeholder="说点什么吧..." maxlength="500" required></textarea>
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+              <span style="font-size:0.76rem;color:var(--text-muted);">当前为本地预览保存 · 上线后可接入免费 Giscus / Twikoo</span>
+              <button type="submit" class="btn btn-primary btn-sm">发布留言</button>
+            </div>
+          </form>
+
+          <div class="guestbook-list">
+            ${
+              messages.length
+                ? messages
+                    .map(
+                      (m) => `
+                      <article class="guestbook-item liquid-glass">
+                        <div class="guestbook-item-head">
+                          <span class="guestbook-author">${escapeHtml(m.author)}</span>
+                          <span class="guestbook-time">${escapeHtml(m.time)}</span>
+                        </div>
+                        <p class="guestbook-msg">${escapeHtml(m.text)}</p>
+                      </article>
+                    `
+                    )
+                    .join('')
+                : `
+                  <div class="empty-state-box liquid-glass" style="max-width:none;margin:0;">
+                    <h3>还没有留言</h3>
+                    <p style="margin-bottom:0;">在左侧写下第一条留言试试看吧。</p>
+                  </div>
+                `
+            }
+          </div>
+        </div>
+      </section>
+    `;
+
+    const form = document.getElementById('guestbook-form');
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const author = document.getElementById('gb-name').value.trim();
+      const text = document.getElementById('gb-text').value.trim();
+      if (!author || !text) return;
+      const now = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      const time = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+      saveGuestbookMessage({ author, text, time });
+      showToast('留言已发布');
+      renderGuestbookPage();
+    });
+
+    bindGlassGlint();
+  }
+
+  function renderAboutPage() {
+    const ab = data.about || { heading: '关于', paragraphs: [], interests: [] };
+    const hasContent = (ab.paragraphs && ab.paragraphs.length) || (ab.interests && ab.interests.length);
+
+    appMain.innerHTML = `
+      <section class="page-hero">
+        <div class="container">
+          <div class="page-hero-card liquid-glass">
+            <div>
+              <div class="kicker">About</div>
+              <h1>关于</h1>
+              <p>关于这个个人空间与主人的自由介绍。</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="container">
+          ${
+            hasContent
+              ? `
+                <div class="resume-card liquid-glass" style="max-width:820px;">
+                  <h3>${escapeHtml(ab.heading || '关于我')}</h3>
+                  ${(ab.paragraphs || []).map((p) => `<p style="color:var(--text-secondary);line-height:1.8;">${escapeHtml(p)}</p>`).join('')}
+                  ${
+                    ab.interests && ab.interests.length
+                      ? `<div class="chip-row" style="margin-top:20px;">${ab.interests.map((i) => `<span class="chip">${escapeHtml(i)}</span>`).join('')}</div>`
+                      : ''
+                  }
+                </div>
+              `
+              : `
+                <div class="empty-state-box liquid-glass">
+                  <h3>暂未填写个人介绍</h3>
+                  <p>你可以随时在 <code>data.js</code> 的 <code>about</code> 中自由写下关于你自己、兴趣爱好和建站初衷的介绍。</p>
+                  <a href="#home" class="btn btn-liquid btn-sm">返回首页 →</a>
+                </div>
+              `
+          }
+        </div>
+      </section>
+    `;
+
+    bindGlassGlint();
+  }
+
+  /* ========================================================================
+     6. 弹窗与灯箱
+     ======================================================================== */
+  function bindContentTriggers() {
+    document.querySelectorAll('[data-open-post]').forEach((el) => {
+      el.addEventListener('click', () => {
+        const post = data.posts.find((p) => p.id === el.getAttribute('data-open-post'));
+        if (!post) return;
+        const mins = estimateReadMins(post.content || '');
+        modalMetaBar.innerHTML = `<span>${escapeHtml(post.date || '')}</span><span>·</span><span>约 ${mins} 分钟阅读</span>`;
+        modalBody.innerHTML = `
+          <article class="prose">
+            <h1 id="modal-title">${escapeHtml(post.title)}</h1>
+            <div class="chip-row" style="margin-bottom:20px;">
+              ${(post.tags || []).map((t) => `<span class="chip">#${escapeHtml(t)}</span>`).join('')}
+            </div>
+            ${renderMarkdown(post.content || '')}
+          </article>
+        `;
+        openModal();
+      });
+    });
+
+    document.querySelectorAll('[data-open-lightbox]').forEach((el) => {
+      el.addEventListener('click', () => {
+        openLightbox(Number(el.getAttribute('data-open-lightbox')));
+      });
+    });
+  }
+
+  function openModal() {
+    modal.classList.add('open');
+    modal.setAttribute('aria-hidden', 'false');
+    document.body.style.overflow = 'hidden';
+  }
+
+  function closeModal() {
+    modal.classList.remove('open');
+    modal.setAttribute('aria-hidden', 'true');
+    document.body.style.overflow = '';
+  }
+
+  function openLightbox(idx) {
+    if (!lightboxList.length) return;
+    lightboxIndex = (idx + lightboxList.length) % lightboxList.length;
+    const item = lightboxList[lightboxIndex];
+    document.getElementById('lightbox-img').src = item.src;
+    document.getElementById('lightbox-img').alt = item.title || '';
+    document.getElementById('lightbox-title').textContent = item.title || '';
+    document.getElementById('lightbox-sub').textContent =
+      `${item.location || ''} ${item.date ? '· ' + item.date : ''} (${lightboxIndex + 1}/${lightboxList.length})`;
+    lightbox.classList.add('open');
+    lightbox.setAttribute('aria-hidden', 'false');
+    document.body.style.overflow = 'hidden';
+  }
+
+  function stepLightbox(delta) {
+    openLightbox(lightboxIndex + delta);
+  }
+
+  function closeLightbox() {
+    lightbox.classList.remove('open');
+    lightbox.setAttribute('aria-hidden', 'true');
+    document.body.style.overflow = '';
+  }
+
+  /* ========================================================================
+     7. 路由切换：首页 / 博客 / 随笔 / 画廊 / 留言 / 关于
+     ======================================================================== */
+  function navigate() {
+    stopHomeEffects();
+    const raw = (window.location.hash || '#home').replace('#', '');
+    currentRoute = ['home', 'blog', 'essays', 'gallery', 'guestbook', 'about'].includes(raw) ? raw : 'home';
+
+    document.querySelectorAll('[data-nav]').forEach((el) => {
+      el.classList.toggle('active', el.getAttribute('data-nav') === currentRoute);
+    });
+    document.getElementById('mobile-drawer').classList.remove('open');
+
+    if (currentRoute === 'home') renderHome();
+    else if (currentRoute === 'blog') renderBlogPage();
+    else if (currentRoute === 'essays') renderEssaysPage();
+    else if (currentRoute === 'gallery') renderGalleryPage();
+    else if (currentRoute === 'guestbook') renderGuestbookPage();
+    else if (currentRoute === 'about') renderAboutPage();
+
+    window.scrollTo({ top: 0, behavior: 'instant' });
+  }
+
+  initShell();
+  window.addEventListener('hashchange', navigate);
+  navigate();
+})();
