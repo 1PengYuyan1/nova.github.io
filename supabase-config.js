@@ -10,7 +10,7 @@
  * 注意：未填写时页面会自动使用浏览器本地预览模式（localStorage），不影响站点正常运行。
  */
 window.SUPABASE_CONFIG = {
-  url: '',
-  anonKey: '',
+  url: 'https://qtumtgitqwmnhheioasz.supabase.co',
+  anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF0dW10Z2l0cXdtbmhoZWlvYXN6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTUxODc4MTUsImV4cCI6MjExMDc2MzgxNX0.-A0k4Z8lICywkJHdFEVozDeaA9ixOVo4AiUEhAqsvv4',
   table: 'guestbook',
 };
