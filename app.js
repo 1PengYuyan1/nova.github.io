@@ -168,7 +168,7 @@
   /* ========================================================================
      2. 初始化导航与页脚
      ======================================================================== */
-  function initShell() {
+  function refreshShell() {
     document.getElementById('nav-brand-name').textContent = data.profile.brandName;
     document.getElementById('footer-brand-name').textContent = data.profile.brandName;
     document.getElementById('footer-bio').textContent = data.profile.bio;
@@ -194,15 +194,25 @@
       emailBtn.style.display = 'inline-flex';
       emailText.textContent = data.profile.email;
       contactHint.textContent = '点击下方按钮可快速复制联系邮箱。';
-      emailBtn.addEventListener('click', async () => {
-        try {
-          await navigator.clipboard.writeText(data.profile.email);
-          showToast(`已复制邮箱：${data.profile.email}`);
-        } catch {
-          showToast(`联系邮箱：${data.profile.email}`);
-        }
-      });
+    } else {
+      emailBtn.style.display = 'none';
+      contactHint.textContent = '可在网页管理后台中填写联系邮箱或外链。';
     }
+  }
+
+  function initShell() {
+    refreshShell();
+
+    const emailBtn = document.getElementById('copy-email-btn');
+    emailBtn.addEventListener('click', async () => {
+      if (!data.profile.email) return;
+      try {
+        await navigator.clipboard.writeText(data.profile.email);
+        showToast(`已复制邮箱：${data.profile.email}`);
+      } catch {
+        showToast(`联系邮箱：${data.profile.email}`);
+      }
+    });
 
     document.getElementById('theme-toggle').addEventListener('click', () => {
       const isDark = document.documentElement.classList.toggle('dark');
@@ -622,8 +632,8 @@
           <div class="container">
             <div class="empty-state-box liquid-glass">
               <h3>暂未发布文章</h3>
-              <p>后续在 <code>data.js</code> 的 <code>posts</code> 数组中添加 Markdown 文章，即可自动支持搜索、标签筛选与阅读弹窗。</p>
-              <a href="#home" class="btn btn-liquid btn-sm">返回首页 →</a>
+              <p>点击下方进入网页管理后台，无需代码即可直接编写与发布博客文章。</p>
+              <a href="#admin" class="btn btn-liquid btn-sm">前往管理后台写文章 →</a>
             </div>
           </div>
         </section>
@@ -719,8 +729,8 @@
           <div class="container">
             <div class="empty-state-box liquid-glass">
               <h3>暂未发布随笔</h3>
-              <p>后续在 <code>data.js</code> 的 <code>essays</code> 数组中写下你的随笔，支持附带时间、地点、心情与照片。</p>
-              <a href="#home" class="btn btn-liquid btn-sm">返回首页 →</a>
+              <p>点击下方进入网页管理后台，像发朋友圈一样写随笔并上传配图。</p>
+              <a href="#admin" class="btn btn-liquid btn-sm">前往管理后台发随笔 →</a>
             </div>
           </div>
         </section>
@@ -813,8 +823,8 @@
           <div class="container">
             <div class="empty-state-box liquid-glass">
               <h3>暂未上传照片</h3>
-              <p>将照片放入 <code>assets/images/</code> 并在 <code>data.js</code> 的 <code>gallery</code> 数组中登记后，即可自动展示画廊与全屏灯箱。</p>
-              <a href="#home" class="btn btn-liquid btn-sm">返回首页 →</a>
+              <p>点击下方进入网页管理后台，直接从电脑或手机选图上传到画廊。</p>
+              <a href="#admin" class="btn btn-liquid btn-sm">前往管理后台传照片 →</a>
             </div>
           </div>
         </section>
@@ -980,8 +990,8 @@
               : `
                 <div class="empty-state-box liquid-glass">
                   <h3>暂未填写个人介绍</h3>
-                  <p>你可以随时在 <code>data.js</code> 的 <code>about</code> 中自由写下关于你自己、兴趣爱好和建站初衷的介绍。</p>
-                  <a href="#home" class="btn btn-liquid btn-sm">返回首页 →</a>
+                  <p>点击下方进入网页管理后台，自由写下关于你自己、兴趣爱好和建站初衷。</p>
+                  <a href="#admin" class="btn btn-liquid btn-sm">前往管理后台编辑 →</a>
                 </div>
               `
           }
@@ -1064,7 +1074,7 @@
   function navigate() {
     stopHomeEffects();
     const raw = (window.location.hash || '#home').replace('#', '');
-    currentRoute = ['home', 'blog', 'essays', 'gallery', 'guestbook', 'about'].includes(raw) ? raw : 'home';
+    currentRoute = ['home', 'blog', 'essays', 'gallery', 'guestbook', 'about', 'admin'].includes(raw) ? raw : 'home';
 
     document.querySelectorAll('[data-nav]').forEach((el) => {
       el.classList.toggle('active', el.getAttribute('data-nav') === currentRoute);
@@ -1077,10 +1087,12 @@
     else if (currentRoute === 'gallery') renderGalleryPage();
     else if (currentRoute === 'guestbook') renderGuestbookPage();
     else if (currentRoute === 'about') renderAboutPage();
+    else if (currentRoute === 'admin' && window.ADMIN_PANEL) window.ADMIN_PANEL.render(appMain);
 
     window.scrollTo({ top: 0, behavior: 'instant' });
   }
 
+  window.SITE_APP = { showToast, refreshShell, bindGlassGlint };
   initShell();
   window.addEventListener('hashchange', navigate);
   navigate();
