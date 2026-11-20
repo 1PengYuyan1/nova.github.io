@@ -22,7 +22,15 @@
   let lightboxIndex = 0;
 
   let canvasRaf = null;
+  let canvasCleanup = null;
   let typewriterTimer = null;
+
+  let supabaseSdkPromise = null;
+  let supabaseClient = null;
+  let remoteGuestbookCache = null;
+  let guestbookChannel = null;
+  let lastGuestbookSubmitAt = 0;
+  const recentSelfSubmittedIds = new Set();
 
   /* ========================================================================
      1. 工具函数
@@ -129,7 +137,97 @@
     toastTimer = setTimeout(() => toastEl.classList.remove('show'), 2300);
   }
 
+  function getSupabaseConfig() {
+    const cfg = window.SUPABASE_CONFIG;
+    if (!cfg || typeof cfg.url !== 'string' || typeof cfg.anonKey !== 'string') return null;
+    const url = cfg.url.trim().replace(/\/+$/, '');
+    const anonKey = cfg.anonKey.trim();
+    if (!url || !anonKey) return null;
+    return {
+      url,
+      anonKey,
+      table: (cfg.table || 'guestbook').trim() || 'guestbook',
+    };
+  }
+
+  function formatGuestbookTime(val) {
+    if (!val) return '';
+    const d = new Date(val);
+    if (Number.isNaN(d.getTime())) return String(val);
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
+  function normalizeRemoteRow(row) {
+    return {
+      id: row.id,
+      author: row.author || '匿名访客',
+      text: row.text || '',
+      time: formatGuestbookTime(row.created_at || row.time),
+    };
+  }
+
+  function loadSupabaseSdk() {
+    if (window.supabase && typeof window.supabase.createClient === 'function') {
+      return Promise.resolve(window.supabase);
+    }
+    if (supabaseSdkPromise) return supabaseSdkPromise;
+    supabaseSdkPromise = new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js';
+      script.async = true;
+      script.onload = () => {
+        if (window.supabase && typeof window.supabase.createClient === 'function') {
+          resolve(window.supabase);
+        } else {
+          reject(new Error('Supabase SDK 加载异常'));
+        }
+      };
+      script.onerror = () => {
+        supabaseSdkPromise = null;
+        reject(new Error('无法加载 Supabase SDK'));
+      };
+      document.head.appendChild(script);
+    });
+    return supabaseSdkPromise;
+  }
+
+  async function getSupabaseClient() {
+    const cfg = getSupabaseConfig();
+    if (!cfg) return null;
+    if (supabaseClient) return supabaseClient;
+    const sdk = await loadSupabaseSdk();
+    supabaseClient = sdk.createClient(cfg.url, cfg.anonKey);
+    return supabaseClient;
+  }
+
+  function unsubscribeGuestbookRealtime() {
+    if (guestbookChannel && supabaseClient) {
+      try {
+        supabaseClient.removeChannel(guestbookChannel);
+      } catch {}
+    }
+    guestbookChannel = null;
+  }
+
+  async function fetchRemoteGuestbook() {
+    const cfg = getSupabaseConfig();
+    if (!cfg) return null;
+    const client = await getSupabaseClient();
+    const { data: rows, error } = await client
+      .from(cfg.table)
+      .select('id, author, text, created_at')
+      .order('created_at', { ascending: false })
+      .limit(100);
+    if (error) throw error;
+    remoteGuestbookCache = (rows || []).map(normalizeRemoteRow);
+    return remoteGuestbookCache;
+  }
+
   function loadGuestbookMessages() {
+    if (Array.isArray(remoteGuestbookCache)) {
+      return [...remoteGuestbookCache, ...(data.guestbook || [])];
+    }
     let localItems = [];
     try {
       const raw = localStorage.getItem(GUESTBOOK_STORAGE_KEY);
@@ -152,15 +250,43 @@
   }
 
   function bindGlassGlint() {
-    document.querySelectorAll('.liquid-glass').forEach((el) => {
+    if (window.matchMedia && !window.matchMedia('(hover: hover) and (pointer: fine)').matches) {
+      return;
+    }
+    document.querySelectorAll('.liquid-glass.glass-interactive').forEach((el) => {
       if (el.dataset.glintBound) return;
       el.dataset.glintBound = '1';
+      let rect = null;
+      let rafId = null;
+      let clientX = 0;
+      let clientY = 0;
+
+      el.addEventListener('pointerenter', () => {
+        rect = el.getBoundingClientRect();
+      });
+
       el.addEventListener('pointermove', (e) => {
-        const rect = el.getBoundingClientRect();
-        const x = ((e.clientX - rect.left) / rect.width) * 100;
-        const y = ((e.clientY - rect.top) / rect.height) * 100;
-        el.style.setProperty('--mx', `${x.toFixed(1)}%`);
-        el.style.setProperty('--my', `${y.toFixed(1)}%`);
+        clientX = e.clientX;
+        clientY = e.clientY;
+        if (rafId) return;
+        rafId = requestAnimationFrame(() => {
+          rafId = null;
+          if (!rect || !rect.width || !rect.height) {
+            rect = el.getBoundingClientRect();
+          }
+          const x = ((clientX - rect.left) / rect.width) * 100;
+          const y = ((clientY - rect.top) / rect.height) * 100;
+          el.style.setProperty('--mx', `${x.toFixed(1)}%`);
+          el.style.setProperty('--my', `${y.toFixed(1)}%`);
+        });
+      });
+
+      el.addEventListener('pointerleave', () => {
+        rect = null;
+        if (rafId) {
+          cancelAnimationFrame(rafId);
+          rafId = null;
+        }
       });
     });
   }
@@ -317,6 +443,10 @@
      4. 开屏动效：双轨道点阵 + 打字机
      ======================================================================== */
   function stopHomeEffects() {
+    if (canvasCleanup) {
+      canvasCleanup();
+      canvasCleanup = null;
+    }
     if (canvasRaf) {
       cancelAnimationFrame(canvasRaf);
       canvasRaf = null;
@@ -364,18 +494,28 @@
     const canvas = document.getElementById('hero-canvas');
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
+    const heroStage = canvas.closest('.hero-stage') || canvas;
     let w = 0;
     let h = 0;
     let angle = 0;
+    let lastTime = 0;
+    let inView = true;
+    let disposed = false;
+
+    const prefersReducedMotion =
+      window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
     function resize() {
-      w = canvas.width = canvas.offsetWidth;
-      h = canvas.height = canvas.offsetHeight;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      w = canvas.offsetWidth;
+      h = canvas.offsetHeight;
+      canvas.width = Math.round(w * dpr);
+      canvas.height = Math.round(h * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      if (prefersReducedMotion) renderFrame(0);
     }
-    resize();
-    window.addEventListener('resize', resize);
 
-    const stars = Array.from({ length: 48 }, () => ({
+    const stars = Array.from({ length: 44 }, () => ({
       x: Math.random(),
       y: Math.random(),
       r: Math.random() * 1.4 + 0.5,
@@ -383,13 +523,13 @@
       warm: Math.random() > 0.65,
     }));
 
-    function draw() {
+    function renderFrame(dt) {
       ctx.clearRect(0, 0, w, h);
       const dark = document.documentElement.classList.contains('dark');
       const cx = w * 0.5;
       const cy = h * 0.5;
       const baseR = Math.min(w, h) * 0.34;
-      angle += 0.0022;
+      angle += 0.0022 * dt;
 
       ctx.save();
       ctx.translate(cx, cy);
@@ -415,7 +555,7 @@
       ctx.restore();
 
       for (const s of stars) {
-        s.y -= s.sp;
+        s.y -= s.sp * dt;
         if (s.y < 0) s.y = 1;
         ctx.beginPath();
         ctx.arc(s.x * w, s.y * h, s.r, 0, Math.PI * 2);
@@ -426,11 +566,67 @@
         }
         ctx.fill();
       }
+    }
 
+    function draw(now) {
+      if (disposed || !inView || document.hidden) {
+        canvasRaf = null;
+        return;
+      }
+      const dt = lastTime ? Math.min((now - lastTime) / 16.667, 3) : 1;
+      lastTime = now;
+      renderFrame(dt);
       canvasRaf = requestAnimationFrame(draw);
     }
 
-    draw();
+    function startLoop() {
+      if (disposed || prefersReducedMotion || canvasRaf || !inView || document.hidden) return;
+      lastTime = 0;
+      canvasRaf = requestAnimationFrame(draw);
+    }
+
+    function stopLoop() {
+      if (canvasRaf) {
+        cancelAnimationFrame(canvasRaf);
+        canvasRaf = null;
+      }
+    }
+
+    resize();
+    window.addEventListener('resize', resize, { passive: true });
+
+    const onVisibilityChange = () => {
+      if (document.hidden) stopLoop();
+      else startLoop();
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    let observer = null;
+    if ('IntersectionObserver' in window) {
+      observer = new IntersectionObserver(
+        (entries) => {
+          inView = Boolean(entries[0] && entries[0].isIntersecting);
+          if (inView) startLoop();
+          else stopLoop();
+        },
+        { threshold: 0.01 }
+      );
+      observer.observe(heroStage);
+    }
+
+    canvasCleanup = () => {
+      disposed = true;
+      stopLoop();
+      window.removeEventListener('resize', resize);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      if (observer) observer.disconnect();
+    };
+
+    if (prefersReducedMotion) {
+      renderFrame(0);
+    } else {
+      startLoop();
+    }
   }
 
   /* ========================================================================
@@ -578,7 +774,7 @@
               <div class="bento-tile-title">留言</div>
               <p>路过留下一句话，分享想法或打个招呼。</p>
               <div style="display:flex;justify-content:space-between;align-items:center;">
-                <span class="chip">${gbCount} 条留言</span>
+                <span class="chip" id="home-gb-count">${gbCount} 条留言</span>
                 <span style="color:var(--accent-champagne);font-size:0.84rem;">去留言 →</span>
               </div>
             </a>
@@ -611,6 +807,15 @@
     startHeroTypewriter(p.heroPhrases);
     bindContentTriggers();
     bindGlassGlint();
+
+    if (getSupabaseConfig() && remoteGuestbookCache === null) {
+      fetchRemoteGuestbook()
+        .then((rows) => {
+          const el = document.getElementById('home-gb-count');
+          if (el && rows) el.textContent = `${rows.length + (data.guestbook || []).length} 条留言`;
+        })
+        .catch(() => {});
+    }
   }
 
   function renderBlogPage() {
@@ -881,8 +1086,35 @@
     bindGlassGlint();
   }
 
+  function guestbookItemHTML(m, isNew) {
+    return `
+      <article class="guestbook-item liquid-glass${isNew ? ' is-new' : ''}"${m.id != null ? ` data-gb-id="${escapeHtml(m.id)}"` : ''}>
+        <div class="guestbook-item-head">
+          <span class="guestbook-author">${escapeHtml(m.author)}</span>
+          <span class="guestbook-time">${escapeHtml(m.time)}</span>
+        </div>
+        <p class="guestbook-msg">${escapeHtml(m.text)}</p>
+      </article>
+    `;
+  }
+
+  function guestbookEmptyHTML(text) {
+    return `
+      <div class="empty-state-box liquid-glass" style="max-width:none;margin:0;">
+        <h3>还没有留言</h3>
+        <p style="margin-bottom:0;">${escapeHtml(text || '在左侧写下第一条留言试试看吧。')}</p>
+      </div>
+    `;
+  }
+
   function renderGuestbookPage() {
-    const messages = loadGuestbookMessages();
+    unsubscribeGuestbookRealtime();
+    const sbCfg = getSupabaseConfig();
+    const initialMessages = sbCfg
+      ? Array.isArray(remoteGuestbookCache)
+        ? [...remoteGuestbookCache, ...(data.guestbook || [])]
+        : []
+      : loadGuestbookMessages();
 
     appMain.innerHTML = `
       <section class="page-hero">
@@ -893,7 +1125,9 @@
               <h1>留言</h1>
               <p>欢迎在这里留下足迹、想法或一句问候。</p>
             </div>
-            <span class="chip">共 ${messages.length} 条留言</span>
+            <span class="chip" id="gb-count-chip">${
+              sbCfg && !Array.isArray(remoteGuestbookCache) ? '正在同步留言...' : `共 ${initialMessages.length} 条留言`
+            }</span>
           </div>
         </div>
       </section>
@@ -905,51 +1139,174 @@
             <input class="glass-input" id="gb-name" type="text" placeholder="你的昵称" maxlength="32" required />
             <textarea class="glass-textarea" id="gb-text" placeholder="说点什么吧..." maxlength="500" required></textarea>
             <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
-              <span style="font-size:0.76rem;color:var(--text-muted);">当前为本地预览保存 · 上线后可接入免费 Giscus / Twikoo</span>
-              <button type="submit" class="btn btn-primary btn-sm">发布留言</button>
+              <span class="guestbook-status" id="gb-status">
+                <span class="guestbook-status-dot"></span>
+                <span id="gb-status-text">${
+                  sbCfg
+                    ? '正在连接全网实时留言板...'
+                    : '本地预览模式 · 在 supabase-config.js 填入配置即可开启全网实时同步'
+                }</span>
+              </span>
+              <button type="submit" class="btn btn-primary btn-sm" id="gb-submit-btn">发布留言</button>
             </div>
           </form>
 
-          <div class="guestbook-list">
+          <div class="guestbook-list" id="guestbook-list">
             ${
-              messages.length
-                ? messages
-                    .map(
-                      (m) => `
-                      <article class="guestbook-item liquid-glass">
-                        <div class="guestbook-item-head">
-                          <span class="guestbook-author">${escapeHtml(m.author)}</span>
-                          <span class="guestbook-time">${escapeHtml(m.time)}</span>
-                        </div>
-                        <p class="guestbook-msg">${escapeHtml(m.text)}</p>
-                      </article>
-                    `
-                    )
-                    .join('')
-                : `
-                  <div class="empty-state-box liquid-glass" style="max-width:none;margin:0;">
-                    <h3>还没有留言</h3>
-                    <p style="margin-bottom:0;">在左侧写下第一条留言试试看吧。</p>
-                  </div>
-                `
+              sbCfg && !Array.isArray(remoteGuestbookCache)
+                ? `<div class="empty-state-box liquid-glass" style="max-width:none;margin:0;"><h3>正在加载留言...</h3><p style="margin-bottom:0;">正在从云端同步最新留言。</p></div>`
+                : initialMessages.length
+                  ? initialMessages.map((m) => guestbookItemHTML(m, false)).join('')
+                  : guestbookEmptyHTML()
             }
           </div>
         </div>
       </section>
     `;
 
+    const listEl = document.getElementById('guestbook-list');
+    const countChip = document.getElementById('gb-count-chip');
+    const statusEl = document.getElementById('gb-status');
+    const statusTextEl = document.getElementById('gb-status-text');
+    const submitBtn = document.getElementById('gb-submit-btn');
+
+    function updateListView(messages) {
+      if (!listEl || currentRoute !== 'guestbook') return;
+      if (countChip) countChip.textContent = `共 ${messages.length} 条留言`;
+      listEl.innerHTML = messages.length
+        ? messages.map((m) => guestbookItemHTML(m, false)).join('')
+        : guestbookEmptyHTML();
+    }
+
+    function prependLiveMessage(msg) {
+      if (!listEl || currentRoute !== 'guestbook') return;
+      if (!Array.isArray(remoteGuestbookCache)) remoteGuestbookCache = [];
+      if (msg.id != null && remoteGuestbookCache.some((x) => String(x.id) === String(msg.id))) {
+        return;
+      }
+      remoteGuestbookCache.unshift(msg);
+      const total = remoteGuestbookCache.length + (data.guestbook || []).length;
+      if (countChip) countChip.textContent = `共 ${total} 条留言`;
+      const emptyBox = listEl.querySelector('.empty-state-box');
+      if (emptyBox) listEl.innerHTML = '';
+      listEl.insertAdjacentHTML('afterbegin', guestbookItemHTML(msg, true));
+    }
+
+    function removeLiveMessage(id) {
+      if (!listEl || currentRoute !== 'guestbook' || id == null) return;
+      if (Array.isArray(remoteGuestbookCache)) {
+        remoteGuestbookCache = remoteGuestbookCache.filter((x) => String(x.id) !== String(id));
+      }
+      const card = listEl.querySelector(`[data-gb-id="${CSS.escape(String(id))}"]`);
+      if (card) card.remove();
+      const total = (remoteGuestbookCache ? remoteGuestbookCache.length : 0) + (data.guestbook || []).length;
+      if (countChip) countChip.textContent = `共 ${total} 条留言`;
+      if (total === 0) listEl.innerHTML = guestbookEmptyHTML();
+    }
+
+    if (sbCfg) {
+      (async () => {
+        try {
+          const rows = await fetchRemoteGuestbook();
+          if (currentRoute !== 'guestbook') return;
+          updateListView([...rows, ...(data.guestbook || [])]);
+
+          const client = await getSupabaseClient();
+          if (!client || currentRoute !== 'guestbook') return;
+
+          guestbookChannel = client
+            .channel('guestbook-realtime')
+            .on(
+              'postgres_changes',
+              { event: 'INSERT', schema: 'public', table: sbCfg.table },
+              (payload) => {
+                if (!payload || !payload.new) return;
+                const incoming = normalizeRemoteRow(payload.new);
+                const isSelf = incoming.id != null && recentSelfSubmittedIds.has(String(incoming.id));
+                if (isSelf) recentSelfSubmittedIds.delete(String(incoming.id));
+                prependLiveMessage(incoming);
+                if (!isSelf) showToast(`收到来自 ${incoming.author} 的新留言`);
+              }
+            )
+            .on(
+              'postgres_changes',
+              { event: 'DELETE', schema: 'public', table: sbCfg.table },
+              (payload) => {
+                if (payload && payload.old && payload.old.id != null) {
+                  removeLiveMessage(payload.old.id);
+                }
+              }
+            )
+            .subscribe((status) => {
+              if (currentRoute !== 'guestbook' || !statusEl || !statusTextEl) return;
+              if (status === 'SUBSCRIBED') {
+                statusEl.classList.add('is-live');
+                statusTextEl.textContent = '实时在线 · 全网访客即时同步';
+              } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+                statusEl.classList.remove('is-live');
+                statusTextEl.textContent = '已连接云端（刷新可获取最新留言）';
+              }
+            });
+        } catch (err) {
+          if (currentRoute !== 'guestbook') return;
+          if (statusEl) statusEl.classList.remove('is-live');
+          if (statusTextEl) statusTextEl.textContent = '云端连接失败，请检查 Supabase 配置或网络';
+          if (countChip) countChip.textContent = '同步失败';
+          if (listEl && !Array.isArray(remoteGuestbookCache)) {
+            listEl.innerHTML = guestbookEmptyHTML(`无法连接 Supabase：${err && err.message ? err.message : '请稍后重试'}`);
+          }
+        }
+      })();
+    }
+
     const form = document.getElementById('guestbook-form');
-    form.addEventListener('submit', (e) => {
+    form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const author = document.getElementById('gb-name').value.trim();
-      const text = document.getElementById('gb-text').value.trim();
+      const nameInput = document.getElementById('gb-name');
+      const textInput = document.getElementById('gb-text');
+      const author = nameInput.value.trim();
+      const text = textInput.value.trim();
       if (!author || !text) return;
-      const now = new Date();
-      const pad = (n) => String(n).padStart(2, '0');
-      const time = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
-      saveGuestbookMessage({ author, text, time });
-      showToast('留言已发布');
-      renderGuestbookPage();
+
+      if (!sbCfg) {
+        const time = formatGuestbookTime(new Date().toISOString());
+        saveGuestbookMessage({ author, text, time });
+        showToast('留言已保存在本地预览');
+        renderGuestbookPage();
+        return;
+      }
+
+      const nowMs = Date.now();
+      if (nowMs - lastGuestbookSubmitAt < 5000) {
+        showToast('发送太快啦，请 5 秒后再试');
+        return;
+      }
+
+      submitBtn.disabled = true;
+      submitBtn.textContent = '发布中...';
+      try {
+        const client = await getSupabaseClient();
+        const { data: inserted, error } = await client
+          .from(sbCfg.table)
+          .insert([{ author, text }])
+          .select('id, author, text, created_at')
+          .single();
+        if (error) throw error;
+
+        lastGuestbookSubmitAt = Date.now();
+        const msg = normalizeRemoteRow(inserted || { author, text, created_at: new Date().toISOString() });
+        if (msg.id != null) recentSelfSubmittedIds.add(String(msg.id));
+        prependLiveMessage(msg);
+        textInput.value = '';
+        showToast('留言已全网实时发布');
+      } catch (err) {
+        showToast(`发布失败：${err && err.message ? err.message : '请检查网络'}`);
+      } finally {
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.textContent = '发布留言';
+        }
+      }
     });
 
     bindGlassGlint();
@@ -1073,6 +1430,7 @@
      ======================================================================== */
   function navigate() {
     stopHomeEffects();
+    unsubscribeGuestbookRealtime();
     const raw = (window.location.hash || '#home').replace('#', '');
     currentRoute = ['home', 'blog', 'essays', 'gallery', 'guestbook', 'about', 'admin'].includes(raw) ? raw : 'home';
 

@@ -9,7 +9,7 @@
 
   const DEFAULT_REPO = {
     owner: '1PengYuyan1',
-    repo: 'Luna.github.io',
+    repo: 'nova.github.io',
     branch: 'main',
     token: '',
     demoMode: false,
