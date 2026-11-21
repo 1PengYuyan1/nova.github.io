@@ -19,7 +19,17 @@ window.SITE_DATA = {
   },
   "posts": [],
   "essays": [],
-  "gallery": [],
+  "gallery": [
+    {
+      "id": "g-1795240495019",
+      "title": "晚曦",
+      "category": "生活",
+      "date": "2026-11",
+      "location": "",
+      "camera": "",
+      "src": "./assets/images/gallery-1795240466077.jpg"
+    }
+  ],
   "guestbook": [],
   "about": {
     "heading": "关于这里",
