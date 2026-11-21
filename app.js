@@ -29,6 +29,7 @@
   let supabaseClient = null;
   let remoteGuestbookCache = null;
   let guestbookChannel = null;
+  let guestbookPollTimer = null;
   let lastGuestbookSubmitAt = 0;
   const recentSelfSubmittedIds = new Set();
 
@@ -174,18 +175,19 @@
     if (supabaseSdkPromise) return supabaseSdkPromise;
     supabaseSdkPromise = new Promise((resolve, reject) => {
       const script = document.createElement('script');
-      script.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js';
+      script.src = './vendor/supabase.min.js?v=20261125';
       script.async = true;
       script.onload = () => {
         if (window.supabase && typeof window.supabase.createClient === 'function') {
           resolve(window.supabase);
         } else {
-          reject(new Error('Supabase SDK 加载异常'));
+          supabaseSdkPromise = null;
+          reject(new Error('实时推送组件初始化异常'));
         }
       };
       script.onerror = () => {
         supabaseSdkPromise = null;
-        reject(new Error('无法加载 Supabase SDK'));
+        reject(new Error('实时推送组件加载失败'));
       };
       document.head.appendChild(script);
     });
@@ -202,6 +204,10 @@
   }
 
   function unsubscribeGuestbookRealtime() {
+    if (guestbookPollTimer) {
+      clearInterval(guestbookPollTimer);
+      guestbookPollTimer = null;
+    }
     if (guestbookChannel && supabaseClient) {
       try {
         supabaseClient.removeChannel(guestbookChannel);
@@ -213,15 +219,48 @@
   async function fetchRemoteGuestbook() {
     const cfg = getSupabaseConfig();
     if (!cfg) return null;
-    const client = await getSupabaseClient();
-    const { data: rows, error } = await client
-      .from(cfg.table)
-      .select('id, author, text, created_at')
-      .order('created_at', { ascending: false })
-      .limit(100);
-    if (error) throw error;
-    remoteGuestbookCache = (rows || []).map(normalizeRemoteRow);
+    const endpoint = `${cfg.url}/rest/v1/${encodeURIComponent(cfg.table)}?select=id,author,text,created_at&order=created_at.desc&limit=100`;
+    const res = await fetch(endpoint, {
+      method: 'GET',
+      headers: {
+        apikey: cfg.anonKey,
+        Authorization: `Bearer ${cfg.anonKey}`,
+        Accept: 'application/json',
+      },
+    });
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      throw new Error(errText || `云端读取失败 (${res.status})`);
+    }
+    const rows = await res.json();
+    remoteGuestbookCache = (Array.isArray(rows) ? rows : []).map(normalizeRemoteRow);
     return remoteGuestbookCache;
+  }
+
+  async function insertRemoteGuestbook(author, text) {
+    const cfg = getSupabaseConfig();
+    if (!cfg) throw new Error('未配置云端留言板');
+    const endpoint = `${cfg.url}/rest/v1/${encodeURIComponent(cfg.table)}?select=id,author,text,created_at`;
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        apikey: cfg.anonKey,
+        Authorization: `Bearer ${cfg.anonKey}`,
+        'Content-Type': 'application/json',
+        Prefer: 'return=representation',
+      },
+      body: JSON.stringify({ author, text }),
+    });
+    if (!res.ok) {
+      let msg = `提交失败 (${res.status})`;
+      try {
+        const body = await res.json();
+        if (body && body.message) msg = body.message;
+      } catch {}
+      throw new Error(msg);
+    }
+    const rows = await res.json().catch(() => []);
+    return Array.isArray(rows) && rows.length ? rows[0] : { author, text, created_at: new Date().toISOString() };
   }
 
   function loadGuestbookMessages() {
@@ -1062,56 +1101,82 @@
       if (total === 0) listEl.innerHTML = guestbookEmptyHTML();
     }
 
+    function startFallbackPolling() {
+      if (guestbookPollTimer || currentRoute !== 'guestbook') return;
+      if (statusEl) statusEl.classList.add('is-live');
+      if (statusTextEl) statusTextEl.textContent = '已连接云端 · 自动同步最新留言';
+      guestbookPollTimer = setInterval(async () => {
+        if (currentRoute !== 'guestbook' || document.hidden) return;
+        try {
+          const prevIds = new Set((remoteGuestbookCache || []).map((x) => String(x.id)));
+          const rows = await fetchRemoteGuestbook();
+          if (currentRoute !== 'guestbook' || !rows) return;
+          updateListView([...rows, ...(data.guestbook || [])]);
+          const newest = rows.find((r) => !prevIds.has(String(r.id)) && !recentSelfSubmittedIds.has(String(r.id)));
+          if (newest) showToast(`收到来自 ${newest.author} 的新留言`);
+        } catch {}
+      }, 10000);
+    }
+
     if (sbCfg) {
       (async () => {
         try {
           const rows = await fetchRemoteGuestbook();
           if (currentRoute !== 'guestbook') return;
           updateListView([...rows, ...(data.guestbook || [])]);
+          if (statusEl) statusEl.classList.add('is-live');
+          if (statusTextEl) statusTextEl.textContent = '已连接云端 · 正在启用实时推送...';
 
-          const client = await getSupabaseClient();
-          if (!client || currentRoute !== 'guestbook') return;
+          try {
+            const client = await getSupabaseClient();
+            if (!client || currentRoute !== 'guestbook') return;
 
-          guestbookChannel = client
-            .channel('guestbook-realtime')
-            .on(
-              'postgres_changes',
-              { event: 'INSERT', schema: 'public', table: sbCfg.table },
-              (payload) => {
-                if (!payload || !payload.new) return;
-                const incoming = normalizeRemoteRow(payload.new);
-                const isSelf = incoming.id != null && recentSelfSubmittedIds.has(String(incoming.id));
-                if (isSelf) recentSelfSubmittedIds.delete(String(incoming.id));
-                prependLiveMessage(incoming);
-                if (!isSelf) showToast(`收到来自 ${incoming.author} 的新留言`);
-              }
-            )
-            .on(
-              'postgres_changes',
-              { event: 'DELETE', schema: 'public', table: sbCfg.table },
-              (payload) => {
-                if (payload && payload.old && payload.old.id != null) {
-                  removeLiveMessage(payload.old.id);
+            guestbookChannel = client
+              .channel('guestbook-realtime')
+              .on(
+                'postgres_changes',
+                { event: 'INSERT', schema: 'public', table: sbCfg.table },
+                (payload) => {
+                  if (!payload || !payload.new) return;
+                  const incoming = normalizeRemoteRow(payload.new);
+                  const isSelf = incoming.id != null && recentSelfSubmittedIds.has(String(incoming.id));
+                  if (isSelf) recentSelfSubmittedIds.delete(String(incoming.id));
+                  prependLiveMessage(incoming);
+                  if (!isSelf) showToast(`收到来自 ${incoming.author} 的新留言`);
                 }
-              }
-            )
-            .subscribe((status) => {
-              if (currentRoute !== 'guestbook' || !statusEl || !statusTextEl) return;
-              if (status === 'SUBSCRIBED') {
-                statusEl.classList.add('is-live');
-                statusTextEl.textContent = '实时在线 · 全网访客即时同步';
-              } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-                statusEl.classList.remove('is-live');
-                statusTextEl.textContent = '已连接云端（刷新可获取最新留言）';
-              }
-            });
+              )
+              .on(
+                'postgres_changes',
+                { event: 'DELETE', schema: 'public', table: sbCfg.table },
+                (payload) => {
+                  if (payload && payload.old && payload.old.id != null) {
+                    removeLiveMessage(payload.old.id);
+                  }
+                }
+              )
+              .subscribe((status) => {
+                if (currentRoute !== 'guestbook' || !statusEl || !statusTextEl) return;
+                if (status === 'SUBSCRIBED') {
+                  if (guestbookPollTimer) {
+                    clearInterval(guestbookPollTimer);
+                    guestbookPollTimer = null;
+                  }
+                  statusEl.classList.add('is-live');
+                  statusTextEl.textContent = '实时在线 · 全网访客即时同步';
+                } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+                  startFallbackPolling();
+                }
+              });
+          } catch {
+            startFallbackPolling();
+          }
         } catch (err) {
           if (currentRoute !== 'guestbook') return;
           if (statusEl) statusEl.classList.remove('is-live');
-          if (statusTextEl) statusTextEl.textContent = '云端连接失败，请检查 Supabase 配置或网络';
+          if (statusTextEl) statusTextEl.textContent = '云端连接失败，请检查网络后刷新重试';
           if (countChip) countChip.textContent = '同步失败';
           if (listEl && !Array.isArray(remoteGuestbookCache)) {
-            listEl.innerHTML = guestbookEmptyHTML(`无法连接 Supabase：${err && err.message ? err.message : '请稍后重试'}`);
+            listEl.innerHTML = guestbookEmptyHTML(`无法连接留言服务：${err && err.message ? err.message : '请稍后重试'}`);
           }
         }
       })();
@@ -1143,16 +1208,9 @@
       submitBtn.disabled = true;
       submitBtn.textContent = '发布中...';
       try {
-        const client = await getSupabaseClient();
-        const { data: inserted, error } = await client
-          .from(sbCfg.table)
-          .insert([{ author, text }])
-          .select('id, author, text, created_at')
-          .single();
-        if (error) throw error;
-
+        const inserted = await insertRemoteGuestbook(author, text);
         lastGuestbookSubmitAt = Date.now();
-        const msg = normalizeRemoteRow(inserted || { author, text, created_at: new Date().toISOString() });
+        const msg = normalizeRemoteRow(inserted);
         if (msg.id != null) recentSelfSubmittedIds.add(String(msg.id));
         prependLiveMessage(msg);
         textInput.value = '';
