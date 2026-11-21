@@ -13,6 +13,10 @@
 
   const GUESTBOOK_STORAGE_KEY = 'obsidian-space-guestbook-v1';
   const PENDING_DATA_KEY = 'obsidian-site-data-pending-v1';
+  const VISITOR_ID_KEY = 'obsidian-visitor-id-v1';
+  const VISITOR_NICK_KEY = 'obsidian-visitor-nick-v1';
+  const LOCAL_LIKES_KEY = 'obsidian-local-likes-v1';
+  const LOCAL_COMMENTS_KEY = 'obsidian-local-comments-v1';
 
   let currentRoute = 'home';
   let activeBlogTag = '全部';
@@ -32,7 +36,17 @@
   let guestbookChannel = null;
   let guestbookPollTimer = null;
   let lastGuestbookSubmitAt = 0;
+  let lastCommentSubmitAt = 0;
   const recentSelfSubmittedIds = new Set();
+
+  const interactionsState = {
+    loaded: false,
+    loadingPromise: null,
+    likeCounts: Object.create(null),
+    likedKeys: new Set(),
+    commentsByKey: Object.create(null),
+  };
+  const openEssayCommentKeys = new Set();
 
   /* ========================================================================
      1. 工具函数
@@ -289,6 +303,409 @@
     }
   }
 
+  function escapeAttr(str) {
+    return escapeHtml(str).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  function getVisitorId() {
+    try {
+      let id = localStorage.getItem(VISITOR_ID_KEY);
+      if (!id || id.length < 6) {
+        id = `v-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+        localStorage.setItem(VISITOR_ID_KEY, id);
+      }
+      return id;
+    } catch {
+      return `v-mem-${Math.random().toString(36).slice(2, 10)}`;
+    }
+  }
+
+  function getSavedNick() {
+    try {
+      return localStorage.getItem(VISITOR_NICK_KEY) || '';
+    } catch {
+      return '';
+    }
+  }
+
+  function saveNick(name) {
+    try {
+      if (name) localStorage.setItem(VISITOR_NICK_KEY, name);
+    } catch {}
+  }
+
+  function itemKey(type, id) {
+    return `${type}:${id}`;
+  }
+
+  function getLikeCount(type, id) {
+    return interactionsState.likeCounts[itemKey(type, id)] || 0;
+  }
+
+  function isItemLiked(type, id) {
+    return interactionsState.likedKeys.has(itemKey(type, id));
+  }
+
+  function getItemComments(type, id) {
+    return interactionsState.commentsByKey[itemKey(type, id)] || [];
+  }
+
+  function loadLocalInteractionsFallback() {
+    try {
+      const likes = JSON.parse(localStorage.getItem(LOCAL_LIKES_KEY) || '[]');
+      likes.forEach((k) => {
+        interactionsState.likedKeys.add(k);
+        interactionsState.likeCounts[k] = Math.max(1, interactionsState.likeCounts[k] || 0);
+      });
+    } catch {}
+    try {
+      const comments = JSON.parse(localStorage.getItem(LOCAL_COMMENTS_KEY) || '{}');
+      Object.keys(comments).forEach((k) => {
+        interactionsState.commentsByKey[k] = comments[k];
+      });
+    } catch {}
+  }
+
+  async function ensureInteractionsLoaded(force) {
+    const cfg = getSupabaseConfig();
+    if (!cfg) {
+      if (!interactionsState.loaded) {
+        loadLocalInteractionsFallback();
+        interactionsState.loaded = true;
+      }
+      return;
+    }
+    if (interactionsState.loaded && !force) return;
+    if (interactionsState.loadingPromise && !force) return interactionsState.loadingPromise;
+
+    const visitorId = getVisitorId();
+    const headers = {
+      apikey: cfg.anonKey,
+      Authorization: `Bearer ${cfg.anonKey}`,
+      Accept: 'application/json',
+    };
+
+    interactionsState.loadingPromise = (async () => {
+      try {
+        const [likesRes, commentsRes] = await Promise.all([
+          fetch(`${cfg.url}/rest/v1/item_likes?select=item_type,item_id,visitor_id&limit=2000`, {
+            headers,
+            cache: 'no-store',
+          }),
+          fetch(
+            `${cfg.url}/rest/v1/item_comments?select=id,item_type,item_id,item_title,author,text,created_at&order=created_at.desc&limit=500`,
+            { headers, cache: 'no-store' }
+          ),
+        ]);
+
+        if (likesRes.ok) {
+          const rows = await likesRes.json();
+          const counts = Object.create(null);
+          const liked = new Set();
+          (Array.isArray(rows) ? rows : []).forEach((r) => {
+            const k = itemKey(r.item_type, r.item_id);
+            counts[k] = (counts[k] || 0) + 1;
+            if (r.visitor_id === visitorId) liked.add(k);
+          });
+          interactionsState.likeCounts = counts;
+          interactionsState.likedKeys = liked;
+        }
+
+        if (commentsRes.ok) {
+          const rows = await commentsRes.json();
+          const byKey = Object.create(null);
+          (Array.isArray(rows) ? rows : []).forEach((r) => {
+            const k = itemKey(r.item_type, r.item_id);
+            if (!byKey[k]) byKey[k] = [];
+            byKey[k].push({
+              id: r.id,
+              author: r.author || '匿名访客',
+              text: r.text || '',
+              time: formatGuestbookTime(r.created_at),
+            });
+          });
+          interactionsState.commentsByKey = byKey;
+        }
+
+        interactionsState.loaded = true;
+        syncInteractionDOM();
+      } catch {
+        // 建表尚未执行或网络波动时静默降级，不影响主站展示
+      } finally {
+        interactionsState.loadingPromise = null;
+      }
+    })();
+
+    return interactionsState.loadingPromise;
+  }
+
+  function syncInteractionDOM() {
+    document.querySelectorAll('[data-like-btn]').forEach((btn) => {
+      const k = btn.getAttribute('data-like-btn');
+      const count = interactionsState.likeCounts[k] || 0;
+      const liked = interactionsState.likedKeys.has(k);
+      btn.classList.toggle('is-liked', liked);
+      const numEl = btn.querySelector('.interact-num');
+      if (numEl) numEl.textContent = String(count);
+      const lblEl = btn.querySelector('.interact-like-label');
+      if (lblEl) lblEl.textContent = liked ? '已赞' : '点赞';
+    });
+
+    document.querySelectorAll('[data-comment-count]').forEach((el) => {
+      const k = el.getAttribute('data-comment-count');
+      const list = interactionsState.commentsByKey[k] || [];
+      el.textContent = String(list.length);
+    });
+  }
+
+  async function toggleItemLike(type, id, title) {
+    const k = itemKey(type, id);
+    const prevLiked = interactionsState.likedKeys.has(k);
+    const prevCount = interactionsState.likeCounts[k] || 0;
+
+    // 乐观更新 UI，即时反馈
+    if (prevLiked) {
+      interactionsState.likedKeys.delete(k);
+      interactionsState.likeCounts[k] = Math.max(0, prevCount - 1);
+    } else {
+      interactionsState.likedKeys.add(k);
+      interactionsState.likeCounts[k] = prevCount + 1;
+    }
+    syncInteractionDOM();
+
+    const cfg = getSupabaseConfig();
+    if (!cfg) {
+      try {
+        localStorage.setItem(LOCAL_LIKES_KEY, JSON.stringify([...interactionsState.likedKeys]));
+      } catch {}
+      showToast(prevLiked ? '已取消点赞' : '感谢点赞');
+      return;
+    }
+
+    try {
+      const res = await fetch(`${cfg.url}/rest/v1/rpc/toggle_item_like`, {
+        method: 'POST',
+        headers: {
+          apikey: cfg.anonKey,
+          Authorization: `Bearer ${cfg.anonKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          p_type: type,
+          p_id: String(id),
+          p_visitor: getVisitorId(),
+          p_title: String(title || '').slice(0, 120),
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const result = await res.json();
+      if (result && typeof result.count === 'number') {
+        interactionsState.likeCounts[k] = result.count;
+        if (result.liked) interactionsState.likedKeys.add(k);
+        else interactionsState.likedKeys.delete(k);
+        syncInteractionDOM();
+      }
+      showToast(result && result.liked ? '感谢点赞' : '已取消点赞');
+    } catch {
+      // 网络失败回滚
+      if (prevLiked) interactionsState.likedKeys.add(k);
+      else interactionsState.likedKeys.delete(k);
+      interactionsState.likeCounts[k] = prevCount;
+      syncInteractionDOM();
+      showToast('点赞失败，请稍后重试');
+    }
+  }
+
+  async function submitItemComment(type, id, title, author, text) {
+    const nowMs = Date.now();
+    if (nowMs - lastCommentSubmitAt < 5000) {
+      throw new Error('发送太快啦，请 5 秒后再试');
+    }
+
+    saveNick(author);
+    const k = itemKey(type, id);
+    const cfg = getSupabaseConfig();
+
+    if (!cfg) {
+      const localMsg = {
+        id: `local-${Date.now()}`,
+        author,
+        text,
+        time: formatGuestbookTime(new Date().toISOString()),
+      };
+      if (!interactionsState.commentsByKey[k]) interactionsState.commentsByKey[k] = [];
+      interactionsState.commentsByKey[k].unshift(localMsg);
+      try {
+        localStorage.setItem(LOCAL_COMMENTS_KEY, JSON.stringify(interactionsState.commentsByKey));
+      } catch {}
+      lastCommentSubmitAt = Date.now();
+      syncInteractionDOM();
+      return localMsg;
+    }
+
+    const res = await fetch(
+      `${cfg.url}/rest/v1/item_comments?select=id,item_type,item_id,item_title,author,text,created_at`,
+      {
+        method: 'POST',
+        headers: {
+          apikey: cfg.anonKey,
+          Authorization: `Bearer ${cfg.anonKey}`,
+          'Content-Type': 'application/json',
+          Prefer: 'return=representation',
+        },
+        body: JSON.stringify({
+          item_type: type,
+          item_id: String(id),
+          item_title: String(title || '').slice(0, 120),
+          author,
+          text,
+        }),
+      }
+    );
+
+    if (!res.ok) {
+      let errMsg = `提交失败 (${res.status})`;
+      try {
+        const body = await res.json();
+        if (body && body.message) errMsg = body.message;
+      } catch {}
+      throw new Error(errMsg);
+    }
+
+    const rows = await res.json().catch(() => []);
+    const raw = Array.isArray(rows) && rows.length ? rows[0] : { author, text, created_at: new Date().toISOString() };
+    const saved = {
+      id: raw.id,
+      author: raw.author || author,
+      text: raw.text || text,
+      time: formatGuestbookTime(raw.created_at),
+    };
+    if (!interactionsState.commentsByKey[k]) interactionsState.commentsByKey[k] = [];
+    interactionsState.commentsByKey[k].unshift(saved);
+    lastCommentSubmitAt = Date.now();
+    syncInteractionDOM();
+    return saved;
+  }
+
+  function heartSvg() {
+    return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19.5 12.572l-7.5 7.428l-7.5 -7.428a5 5 0 1 1 7.5 -6.566a5 5 0 1 1 7.5 6.572"></path></svg>`;
+  }
+
+  function commentSvg() {
+    return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>`;
+  }
+
+  function interactionBarHTML(type, id, title, opts) {
+    const k = itemKey(type, id);
+    const liked = isItemLiked(type, id);
+    const lCount = getLikeCount(type, id);
+    const cCount = getItemComments(type, id).length;
+    const inlineMode = opts && opts.inline ? ' data-comment-inline="1"' : '';
+    const showLabel = opts && opts.showLikeLabel;
+    return `
+      <div class="interact-bar">
+        <button
+          type="button"
+          class="interact-btn interact-like${liked ? ' is-liked' : ''}"
+          data-like-btn="${escapeAttr(k)}"
+          data-itype="${escapeAttr(type)}"
+          data-iid="${escapeAttr(id)}"
+          data-ititle="${escapeAttr(title || '')}"
+          aria-label="点赞"
+        >
+          ${heartSvg()}
+          ${showLabel ? `<span class="interact-like-label">${liked ? '已赞' : '点赞'}</span>` : ''}
+          <span class="interact-num">${lCount}</span>
+        </button>
+        <button
+          type="button"
+          class="interact-btn interact-comment"
+          data-comment-btn="${escapeAttr(k)}"
+          data-itype="${escapeAttr(type)}"
+          data-iid="${escapeAttr(id)}"
+          data-ititle="${escapeAttr(title || '')}"${inlineMode}
+          aria-label="评论"
+        >
+          ${commentSvg()}
+          <span class="interact-num" data-comment-count="${escapeAttr(k)}">${cCount}</span>
+        </button>
+      </div>
+    `;
+  }
+
+  function commentListHTML(type, id) {
+    const list = getItemComments(type, id);
+    if (!list.length) {
+      return `<div class="comment-empty">还没有评论，快来写下第一条看法吧。</div>`;
+    }
+    return list
+      .map(
+        (c) => `
+        <div class="comment-item">
+          <div class="comment-item-head">
+            <span class="comment-author">${escapeHtml(c.author)}</span>
+            <span class="comment-time">${escapeHtml(c.time)}</span>
+          </div>
+          <p class="comment-text">${escapeHtml(c.text)}</p>
+        </div>
+      `
+      )
+      .join('');
+  }
+
+  function commentBoxHTML(type, id, title) {
+    const k = itemKey(type, id);
+    const savedNick = getSavedNick();
+    return `
+      <form class="comment-form" data-comment-form="${escapeAttr(k)}" data-itype="${escapeAttr(type)}" data-iid="${escapeAttr(id)}" data-ititle="${escapeAttr(title || '')}">
+        <textarea class="glass-textarea" name="text" placeholder="写下你的评论..." maxlength="500" required></textarea>
+        <div class="comment-form-row">
+          <input class="glass-input" name="author" type="text" placeholder="你的昵称" maxlength="32" value="${escapeAttr(savedNick)}" required />
+          <button type="submit" class="btn btn-primary btn-sm">发布评论</button>
+        </div>
+      </form>
+      <div class="comment-list" data-comment-list="${escapeAttr(k)}">
+        ${commentListHTML(type, id)}
+      </div>
+    `;
+  }
+
+  function bindCommentForms(root) {
+    (root || document).querySelectorAll('[data-comment-form]').forEach((form) => {
+      if (form.dataset.bound) return;
+      form.dataset.bound = '1';
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const type = form.getAttribute('data-itype');
+        const id = form.getAttribute('data-iid');
+        const title = form.getAttribute('data-ititle') || '';
+        const k = itemKey(type, id);
+        const authorInput = form.querySelector('input[name="author"]');
+        const textInput = form.querySelector('textarea[name="text"]');
+        const submitBtn = form.querySelector('button[type="submit"]');
+        const author = authorInput.value.trim();
+        const text = textInput.value.trim();
+        if (!author || !text) return;
+
+        submitBtn.disabled = true;
+        submitBtn.textContent = '发布中...';
+        try {
+          await submitItemComment(type, id, title, author, text);
+          textInput.value = '';
+          document.querySelectorAll(`[data-comment-list="${CSS.escape(k)}"]`).forEach((listEl) => {
+            listEl.innerHTML = commentListHTML(type, id);
+          });
+          showToast('评论已发布');
+        } catch (err) {
+          showToast(err && err.message ? err.message : '评论发布失败，请稍后重试');
+        } finally {
+          submitBtn.disabled = false;
+          submitBtn.textContent = '发布评论';
+        }
+      });
+    });
+  }
+
   function bindGlassGlint() {
     // 悬停高光已改由纯 CSS opacity GPU 合成层实现，鼠标移动零 JS 计算、零重绘
   }
@@ -386,7 +803,7 @@
   function blogCardHTML(post) {
     const mins = estimateReadMins(post.content || '');
     return `
-      <article class="blog-card liquid-glass glass-interactive" data-open-post="${post.id}">
+      <article class="blog-card liquid-glass glass-interactive" data-open-post="${escapeAttr(post.id)}">
         <div>
           <div class="blog-meta">
             <span>${escapeHtml(post.date || '')}</span>
@@ -396,16 +813,22 @@
           <h3 class="blog-title">${escapeHtml(post.title)}</h3>
           <p class="blog-excerpt">${escapeHtml(post.excerpt || '')}</p>
         </div>
-        <div class="chip-row">
-          ${(post.tags || []).map((t) => `<span class="chip">#${escapeHtml(t)}</span>`).join('')}
+        <div class="blog-card-foot">
+          <div class="chip-row">
+            ${(post.tags || []).map((t) => `<span class="chip">#${escapeHtml(t)}</span>`).join('')}
+          </div>
+          ${interactionBarHTML('blog', post.id, post.title)}
         </div>
       </article>
     `;
   }
 
   function essayCardHTML(essay, showPhoto) {
+    const essayTitle = essay.mood || (essay.text || '').slice(0, 24) || '随笔';
+    const k = itemKey('essay', essay.id);
+    const isInlineOpen = showPhoto && openEssayCommentKeys.has(k);
     return `
-      <article class="essay-card liquid-glass glass-interactive">
+      <article class="essay-card liquid-glass glass-interactive" data-essay-card="${escapeAttr(essay.id)}">
         <div class="essay-top">
           <span>${escapeHtml(essay.date || '')}</span>
           ${essay.mood ? `<span class="essay-mood">${escapeHtml(essay.mood)}</span>` : ''}
@@ -413,13 +836,23 @@
         <p class="essay-text">${escapeHtml(essay.text || '')}</p>
         ${
           showPhoto && essay.image
-            ? `<img class="essay-photo" src="${essay.image}" alt="${escapeHtml(essay.mood || '随笔配图')}" data-essay-img="${essay.id}" loading="lazy" />`
+            ? `<img class="essay-photo" src="${essay.image}" alt="${escapeHtml(essay.mood || '随笔配图')}" data-essay-img="${escapeAttr(essay.id)}" loading="lazy" />`
             : ''
         }
         <div class="essay-foot">
-          <span>${escapeHtml(essay.location || '')}</span>
-          ${essay.category ? `<span>#${escapeHtml(essay.category)}</span>` : ''}
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+            ${essay.location ? `<span>${escapeHtml(essay.location)}</span>` : ''}
+            ${essay.category ? `<span>#${escapeHtml(essay.category)}</span>` : ''}
+          </div>
+          ${interactionBarHTML('essay', essay.id, essayTitle, { inline: showPhoto })}
         </div>
+        ${
+          showPhoto
+            ? `<div class="inline-comments" data-inline-comments="${escapeAttr(k)}" style="${isInlineOpen ? '' : 'display:none;'}">${
+                isInlineOpen ? commentBoxHTML('essay', essay.id, essayTitle) : ''
+              }</div>`
+            : ''
+        }
       </article>
     `;
   }
@@ -435,6 +868,9 @@
           <div class="photo-sub">
             <span>${escapeHtml(item.location || '')}</span>
             <span>${escapeHtml(item.date || '')}</span>
+          </div>
+          <div class="photo-actions">
+            ${interactionBarHTML('gallery', item.id, item.title || '画廊照片')}
           </div>
         </figcaption>
       </figure>
@@ -852,7 +1288,8 @@
       .filter((e) => e.image)
       .map((e) => ({
         id: e.id,
-        title: e.mood || '随笔配图',
+        itemType: 'essay',
+        title: e.mood || (e.text || '').slice(0, 24) || '随笔配图',
         location: e.location || '',
         date: e.date || '',
         camera: e.category || '',
@@ -904,6 +1341,8 @@
       });
     });
 
+    bindContentTriggers();
+    bindCommentForms(appMain);
     bindGlassGlint();
   }
 
@@ -1034,7 +1473,7 @@
         <div class="container guestbook-layout">
           <form class="guestbook-form liquid-glass" id="guestbook-form">
             <h3>写下你的留言</h3>
-            <input class="glass-input" id="gb-name" type="text" placeholder="你的昵称" maxlength="32" required />
+            <input class="glass-input" id="gb-name" type="text" placeholder="你的昵称" maxlength="32" value="${escapeAttr(getSavedNick())}" required />
             <textarea class="glass-textarea" id="gb-text" placeholder="说点什么吧..." maxlength="500" required></textarea>
             <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
               <span class="guestbook-status" id="gb-status">
@@ -1191,6 +1630,7 @@
       const author = nameInput.value.trim();
       const text = textInput.value.trim();
       if (!author || !text) return;
+      saveNick(author);
 
       if (!sbCfg) {
         const time = formatGuestbookTime(new Date().toISOString());
@@ -1277,33 +1717,170 @@
   }
 
   /* ========================================================================
-     6. 弹窗与灯箱
+     6. 弹窗与灯箱（含博客/随笔/画廊点赞与评论）
      ======================================================================== */
+  function openPostModal(post, focusComments) {
+    if (!post) return;
+    const mins = estimateReadMins(post.content || '');
+    const k = itemKey('blog', post.id);
+    modalMetaBar.innerHTML = `<span>${escapeHtml(post.date || '')}</span><span>·</span><span>约 ${mins} 分钟阅读</span>`;
+    modalBody.innerHTML = `
+      <article class="prose">
+        <h1 id="modal-title">${escapeHtml(post.title)}</h1>
+        <div class="chip-row" style="margin-bottom:20px;">
+          ${(post.tags || []).map((t) => `<span class="chip">#${escapeHtml(t)}</span>`).join('')}
+        </div>
+        ${renderMarkdown(post.content || '')}
+      </article>
+      <section class="interaction-section" id="modal-comments-anchor">
+        <div class="interaction-head">
+          <h3>点赞与评论</h3>
+          ${interactionBarHTML('blog', post.id, post.title, { showLikeLabel: true })}
+        </div>
+        ${commentBoxHTML('blog', post.id, post.title)}
+      </section>
+    `;
+    bindLikeButtons(modalBody);
+    bindCommentForms(modalBody);
+    const modalCommentBtn = modalBody.querySelector(`[data-comment-btn="${CSS.escape(k)}"]`);
+    if (modalCommentBtn) {
+      modalCommentBtn.addEventListener('click', () => {
+        const ta = modalBody.querySelector('textarea[name="text"]');
+        if (ta) ta.focus();
+      });
+    }
+    openModal();
+    if (focusComments) {
+      requestAnimationFrame(() => {
+        const anchor = document.getElementById('modal-comments-anchor');
+        if (anchor) anchor.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    }
+    ensureInteractionsLoaded(true).then(() => {
+      const listEl = modalBody.querySelector(`[data-comment-list="${CSS.escape(k)}"]`);
+      if (listEl) listEl.innerHTML = commentListHTML('blog', post.id);
+    });
+  }
+
+  function openCommentsModal(type, id, title, subtitle, photoSrc) {
+    const k = itemKey(type, id);
+    const typeLabel = type === 'gallery' ? '画廊评论' : type === 'essay' ? '随笔评论' : '文章评论';
+    modalMetaBar.innerHTML = `<span>${typeLabel}</span>`;
+    modalBody.innerHTML = `
+      <div>
+        <h1 id="modal-title" style="margin:0 0 12px;font-family:var(--font-display);font-size:1.45rem;">${escapeHtml(title || typeLabel)}</h1>
+        ${photoSrc ? `<img class="modal-photo-preview" src="${escapeAttr(photoSrc)}" alt="${escapeAttr(title || '')}" />` : ''}
+        ${subtitle ? `<p style="margin:0 0 18px;color:var(--text-secondary);line-height:1.75;white-space:pre-wrap;">${escapeHtml(subtitle)}</p>` : ''}
+        <section class="interaction-section" style="margin-top:12px;padding-top:18px;">
+          <div class="interaction-head">
+            <h3>互动与评论</h3>
+            ${interactionBarHTML(type, id, title, { showLikeLabel: true })}
+          </div>
+          ${commentBoxHTML(type, id, title)}
+        </section>
+      </div>
+    `;
+    bindLikeButtons(modalBody);
+    bindCommentForms(modalBody);
+    const modalCommentBtn = modalBody.querySelector(`[data-comment-btn="${CSS.escape(k)}"]`);
+    if (modalCommentBtn) {
+      modalCommentBtn.addEventListener('click', () => {
+        const ta = modalBody.querySelector('textarea[name="text"]');
+        if (ta) ta.focus();
+      });
+    }
+    openModal();
+    ensureInteractionsLoaded(true).then(() => {
+      const listEl = modalBody.querySelector(`[data-comment-list="${CSS.escape(k)}"]`);
+      if (listEl) listEl.innerHTML = commentListHTML(type, id);
+    });
+  }
+
+  function bindLikeButtons(root) {
+    (root || document).querySelectorAll('[data-like-btn]').forEach((btn) => {
+      if (btn.dataset.likeBound) return;
+      btn.dataset.likeBound = '1';
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        toggleItemLike(
+          btn.getAttribute('data-itype'),
+          btn.getAttribute('data-iid'),
+          btn.getAttribute('data-ititle') || ''
+        );
+      });
+    });
+  }
+
   function bindContentTriggers() {
-    document.querySelectorAll('[data-open-post]').forEach((el) => {
-      el.addEventListener('click', () => {
-        const post = data.posts.find((p) => p.id === el.getAttribute('data-open-post'));
-        if (!post) return;
-        const mins = estimateReadMins(post.content || '');
-        modalMetaBar.innerHTML = `<span>${escapeHtml(post.date || '')}</span><span>·</span><span>约 ${mins} 分钟阅读</span>`;
-        modalBody.innerHTML = `
-          <article class="prose">
-            <h1 id="modal-title">${escapeHtml(post.title)}</h1>
-            <div class="chip-row" style="margin-bottom:20px;">
-              ${(post.tags || []).map((t) => `<span class="chip">#${escapeHtml(t)}</span>`).join('')}
-            </div>
-            ${renderMarkdown(post.content || '')}
-          </article>
-        `;
-        openModal();
+    bindLikeButtons(appMain);
+
+    appMain.querySelectorAll('[data-comment-btn]').forEach((btn) => {
+      if (btn.dataset.commentBound) return;
+      btn.dataset.commentBound = '1';
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        const type = btn.getAttribute('data-itype');
+        const id = btn.getAttribute('data-iid');
+        const title = btn.getAttribute('data-ititle') || '';
+        const isInline = btn.getAttribute('data-comment-inline') === '1';
+
+        if (type === 'blog') {
+          const post = data.posts.find((p) => p.id === id);
+          if (post) openPostModal(post, true);
+          return;
+        }
+
+        if (type === 'essay' && isInline) {
+          const k = itemKey('essay', id);
+          const drawer = appMain.querySelector(`[data-inline-comments="${CSS.escape(k)}"]`);
+          if (drawer) {
+            const willOpen = drawer.style.display === 'none';
+            if (willOpen) {
+              openEssayCommentKeys.add(k);
+              drawer.innerHTML = commentBoxHTML('essay', id, title);
+              drawer.style.display = '';
+              bindCommentForms(drawer);
+              ensureInteractionsLoaded(true).then(() => {
+                const listEl = drawer.querySelector(`[data-comment-list="${CSS.escape(k)}"]`);
+                if (listEl) listEl.innerHTML = commentListHTML('essay', id);
+              });
+            } else {
+              openEssayCommentKeys.delete(k);
+              drawer.style.display = 'none';
+            }
+            return;
+          }
+        }
+
+        if (type === 'essay') {
+          const essay = data.essays.find((x) => x.id === id);
+          openCommentsModal('essay', id, title, essay ? essay.text : '', essay ? essay.image : '');
+          return;
+        }
+
+        if (type === 'gallery') {
+          const photo = data.gallery.find((x) => x.id === id);
+          openCommentsModal('gallery', id, title, photo ? [photo.location, photo.date].filter(Boolean).join(' · ') : '', photo ? photo.src : '');
+        }
       });
     });
 
-    document.querySelectorAll('[data-open-lightbox]').forEach((el) => {
+    appMain.querySelectorAll('[data-open-post]').forEach((el) => {
+      el.addEventListener('click', () => {
+        const post = data.posts.find((p) => p.id === el.getAttribute('data-open-post'));
+        if (post) openPostModal(post, false);
+      });
+    });
+
+    appMain.querySelectorAll('[data-open-lightbox]').forEach((el) => {
       el.addEventListener('click', () => {
         openLightbox(Number(el.getAttribute('data-open-lightbox')));
       });
     });
+
+    ensureInteractionsLoaded(false);
   }
 
   function openModal() {
@@ -1322,11 +1899,33 @@
     if (!lightboxList.length) return;
     lightboxIndex = (idx + lightboxList.length) % lightboxList.length;
     const item = lightboxList[lightboxIndex];
+    const itemType = item.itemType || 'gallery';
     document.getElementById('lightbox-img').src = item.src;
     document.getElementById('lightbox-img').alt = item.title || '';
     document.getElementById('lightbox-title').textContent = item.title || '';
     document.getElementById('lightbox-sub').textContent =
       `${item.location || ''} ${item.date ? '· ' + item.date : ''} (${lightboxIndex + 1}/${lightboxList.length})`;
+
+    const actionsEl = document.getElementById('lightbox-actions');
+    if (actionsEl && item.id) {
+      actionsEl.innerHTML = interactionBarHTML(itemType, item.id, item.title || '画廊照片');
+      bindLikeButtons(actionsEl);
+      const lbCommentBtn = actionsEl.querySelector('[data-comment-btn]');
+      if (lbCommentBtn) {
+        lbCommentBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          closeLightbox();
+          openCommentsModal(
+            itemType,
+            item.id,
+            item.title || '画廊照片',
+            [item.location, item.date].filter(Boolean).join(' · '),
+            item.src
+          );
+        });
+      }
+    }
+
     lightbox.classList.add('open');
     lightbox.setAttribute('aria-hidden', 'false');
     document.body.style.overflow = 'hidden';

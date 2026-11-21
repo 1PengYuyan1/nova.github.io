@@ -1668,6 +1668,213 @@ html:not(.dark) .filter-pill.active {
   color: var(--text-secondary);
 }
 
+.blog-card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.interact-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.interact-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--glass-hairline);
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  font-weight: 500;
+  line-height: 1;
+  transition: color 0.18s ease, background-color 0.18s ease, border-color 0.18s ease, transform 0.18s ease;
+}
+
+.interact-btn svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.interact-btn:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.1);
+  border-color: var(--glass-border);
+}
+
+.interact-btn:active {
+  transform: scale(0.94);
+}
+
+.interact-like.is-liked {
+  color: #f28b82;
+  background: rgba(242, 139, 130, 0.14);
+  border-color: rgba(242, 139, 130, 0.36);
+}
+
+.interact-like.is-liked svg {
+  fill: currentColor;
+}
+
+html:not(.dark) .interact-btn {
+  background: rgba(20, 20, 19, 0.045);
+}
+
+html:not(.dark) .interact-btn:hover {
+  background: rgba(20, 20, 19, 0.09);
+}
+
+html:not(.dark) .interact-like.is-liked {
+  color: #d94b43;
+  background: rgba(217, 75, 67, 0.12);
+  border-color: rgba(217, 75, 67, 0.32);
+}
+
+.photo-actions {
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid var(--glass-hairline);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+/* 内联随笔评论抽屉 & 弹窗评论区 */
+.inline-comments {
+  margin-top: 12px;
+  padding-top: 14px;
+  border-top: 1px solid var(--glass-hairline);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.interaction-section {
+  margin-top: 32px;
+  padding-top: 24px;
+  border-top: 1px solid var(--glass-hairline);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.interaction-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.interaction-head h3 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 1.06rem;
+}
+
+.comment-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.comment-form-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.comment-form .glass-input {
+  max-width: 240px;
+  padding: 9px 13px;
+  font-size: 0.85rem;
+}
+
+.comment-form .glass-textarea {
+  min-height: 78px;
+  padding: 10px 13px;
+  font-size: 0.86rem;
+}
+
+.comment-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.comment-item {
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--glass-hairline);
+}
+
+html:not(.dark) .comment-item {
+  background: rgba(20, 20, 19, 0.035);
+}
+
+.comment-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 5px;
+}
+
+.comment-author {
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.comment-time {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.comment-text {
+  margin: 0;
+  font-size: 0.87rem;
+  line-height: 1.65;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.comment-empty {
+  font-size: 0.84rem;
+  color: var(--text-muted);
+  padding: 10px 2px;
+}
+
+.modal-photo-preview {
+  width: 100%;
+  max-height: 360px;
+  object-fit: cover;
+  border-radius: 16px;
+  border: 1px solid var(--glass-hairline);
+  margin-bottom: 16px;
+}
+
+.lightbox-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 6px;
+}
+
 /* ==========================================================================
    Essays / 随笔（时间流碎片与生活思考）
    ========================================================================== */
