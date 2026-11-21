@@ -21,8 +21,16 @@ window.SITE_DATA = {
         "url": "https://github.com/1PengYuyan1"
       },
       {
+        "label": "LinuxDo",
+        "url": "https://linux.do/u/pengyuyan1"
+      },
+      {
         "label": "BiliBili",
-        "url": "https://space.bilibili.com/欧萌萌--"
+        "url": "https://space.bilibili.com/https://space.bilibili.com/1015004297?spm_id_from=333.1007.0.0"
+      },
+      {
+        "label": "知乎",
+        "url": "https://www.zhihu.com/people/24-83-71-51-83"
       }
     ]
   },
@@ -44,5 +52,6 @@ window.SITE_DATA = {
     "heading": "关于这里",
     "paragraphs": [],
     "interests": []
-  }
+  },
+  "_updatedAt": 1795242111305
 };
