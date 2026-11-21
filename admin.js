@@ -509,19 +509,49 @@
           .value.split('\n')
           .map((s) => s.trim())
           .filter(Boolean);
+        const parseSocialLine = (rawLine) => {
+          const line = rawLine.trim();
+          if (!line) return null;
+          let label = '';
+          let url = '';
+
+          // 1. 支持英文 | 或中文全角 ｜ 分隔
+          const pipeIdx = line.search(/[|｜]/);
+          if (pipeIdx >= 0) {
+            label = line.slice(0, pipeIdx).trim();
+            url = line.slice(pipeIdx + 1).trim();
+          } else {
+            // 2. 支持直接贴网址，或用空格 / 冒号分隔（如 "GitHub https://..." 或 "GitHub：https://..."）
+            const urlMatch = line.match(/(https?:\/\/\S+)/i);
+            if (urlMatch) {
+              url = urlMatch[1].trim();
+              label = line
+                .slice(0, urlMatch.index)
+                .replace(/[:：\-—、,\s]+$/g, '')
+                .trim();
+            }
+          }
+
+          if (!url) return null;
+          if (!/^https?:\/\//i.test(url) && !/^mailto:/i.test(url)) {
+            url = `https://${url}`;
+          }
+          if (!label) {
+            try {
+              const host = new URL(url).hostname.replace(/^www\./, '');
+              label = host.split('.')[0] || host;
+            } catch {
+              label = url;
+            }
+          }
+          return { label, url };
+        };
+
         const socials = document
           .getElementById('f-socials')
           .value.split('\n')
-          .map((line) => line.trim())
-          .filter(Boolean)
-          .map((line) => {
-            const parts = line.split('|');
-            return {
-              label: (parts[0] || '').trim(),
-              url: (parts.slice(1).join('|') || '').trim(),
-            };
-          })
-          .filter((s) => s.label && s.url);
+          .map(parseSocialLine)
+          .filter(Boolean);
 
         window.SITE_DATA.profile = {
           ...window.SITE_DATA.profile,
