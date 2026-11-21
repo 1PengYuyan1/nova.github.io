@@ -12,6 +12,7 @@
   const toastEl = document.getElementById('toast');
 
   const GUESTBOOK_STORAGE_KEY = 'obsidian-space-guestbook-v1';
+  const PENDING_DATA_KEY = 'obsidian-site-data-pending-v1';
 
   let currentRoute = 'home';
   let activeBlogTag = '全部';
@@ -1366,8 +1367,90 @@
     window.scrollTo({ top: 0, behavior: 'instant' });
   }
 
+  function applySiteDataInPlace(next) {
+    if (!next || typeof next !== 'object') return;
+    if (next.profile && typeof next.profile === 'object') data.profile = next.profile;
+    if (Array.isArray(next.posts)) data.posts = next.posts;
+    if (Array.isArray(next.essays)) data.essays = next.essays;
+    if (Array.isArray(next.gallery)) data.gallery = next.gallery;
+    if (Array.isArray(next.guestbook)) data.guestbook = next.guestbook;
+    if (next.about && typeof next.about === 'object') data.about = next.about;
+    if (typeof next._updatedAt === 'number') data._updatedAt = next._updatedAt;
+  }
+
+  function parseSiteDataScript(jsText) {
+    const marker = jsText.indexOf('window.SITE_DATA');
+    if (marker < 0) return null;
+    const eqIdx = jsText.indexOf('=', marker);
+    if (eqIdx < 0) return null;
+    let body = jsText.slice(eqIdx + 1).trim();
+    if (body.endsWith(';')) body = body.slice(0, -1).trim();
+    return JSON.parse(body);
+  }
+
+  function restorePendingSiteData() {
+    try {
+      const raw = localStorage.getItem(PENDING_DATA_KEY);
+      if (!raw) return 0;
+      const parsed = JSON.parse(raw);
+      if (!parsed || !parsed.data || typeof parsed.updatedAt !== 'number') return 0;
+      if (Date.now() - parsed.updatedAt > 10 * 60 * 1000) {
+        localStorage.removeItem(PENDING_DATA_KEY);
+        return 0;
+      }
+      const baseTs = typeof data._updatedAt === 'number' ? data._updatedAt : 0;
+      if (parsed.updatedAt > baseTs) {
+        applySiteDataInPlace(parsed.data);
+        return parsed.updatedAt;
+      }
+      localStorage.removeItem(PENDING_DATA_KEY);
+      return 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  async function syncLatestSiteData(pendingTs) {
+    try {
+      const res = await fetch(`./data.js?t=${Date.now()}`, { cache: 'no-store' });
+      if (!res.ok) return;
+      const text = await res.text();
+      const remote = parseSiteDataScript(text);
+      if (!remote || typeof remote !== 'object') return;
+
+      const remoteTs = typeof remote._updatedAt === 'number' ? remote._updatedAt : 0;
+      const currentTs = typeof data._updatedAt === 'number' ? data._updatedAt : 0;
+
+      if (pendingTs && remoteTs >= pendingTs) {
+        try {
+          localStorage.removeItem(PENDING_DATA_KEY);
+        } catch {}
+      }
+
+      // 如果本地有更新的刚保存快照（GitHub Pages 仍在构建），暂不被旧线上覆盖
+      if (pendingTs && remoteTs < pendingTs) return;
+
+      const shouldUpdate =
+        remoteTs > currentTs ||
+        (remoteTs === 0 && currentTs === 0 && JSON.stringify(remote) !== JSON.stringify(data));
+      if (!shouldUpdate) return;
+
+      applySiteDataInPlace(remote);
+      refreshShell();
+
+      // 避免打断用户正在填写后台表单或留言输入
+      if (currentRoute === 'home') renderHome();
+      else if (currentRoute === 'blog') renderBlogPage();
+      else if (currentRoute === 'essays') renderEssaysPage();
+      else if (currentRoute === 'gallery') renderGalleryPage();
+      else if (currentRoute === 'about') renderAboutPage();
+    } catch {}
+  }
+
   window.SITE_APP = { showToast, refreshShell, bindGlassGlint };
+  const pendingTs = restorePendingSiteData();
   initShell();
   window.addEventListener('hashchange', navigate);
   navigate();
+  syncLatestSiteData(pendingTs);
 })();

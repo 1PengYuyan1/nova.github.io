@@ -6,6 +6,7 @@
  */
 (function () {
   const AUTH_KEY = 'obsidian-cms-github-auth-v1';
+  const PENDING_DATA_KEY = 'obsidian-site-data-pending-v1';
 
   const DEFAULT_REPO = {
     owner: '1PengYuyan1',
@@ -200,6 +201,7 @@
     const existing = await ghRequest(
       `/repos/${auth.owner}/${auth.repo}/contents/${filePath}?ref=${encodeURIComponent(auth.branch || 'main')}`
     );
+    window.SITE_DATA._updatedAt = Date.now();
     const contentJs = serializeSiteData(window.SITE_DATA);
 
     await ghRequest(`/repos/${auth.owner}/${auth.repo}/contents/${filePath}`, {
@@ -212,7 +214,13 @@
         branch: auth.branch || 'main',
       }),
     });
-    toast('已保存并发布到 GitHub！约 30 秒后全网自动生效');
+    try {
+      localStorage.setItem(
+        PENDING_DATA_KEY,
+        JSON.stringify({ updatedAt: window.SITE_DATA._updatedAt, data: window.SITE_DATA })
+      );
+    } catch {}
+    toast('已发布！本机直接刷新即刻生效，全网约 20~30 秒同步完成');
     return { demo: false };
   }
 
