@@ -19,6 +19,10 @@ window.SITE_DATA = {
       {
         "label": "GitHub",
         "url": "https://github.com/1PengYuyan1"
+      },
+      {
+        "label": "BiliBili",
+        "url": "https://space.bilibili.com/欧萌萌--"
       }
     ]
   },
