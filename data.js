@@ -13,23 +13,18 @@ window.SITE_DATA = {
       "心得"
     ],
     "heroSubline": "记录平淡",
-    "bio": "思考、随笔、光影与生活的淡人。",
+    "bio": "记录思考、随笔、光影与生活的淡人。",
     "email": "1209565852@qq.com",
-    "socials": []
+    "socials": [
+      {
+        "label": "GitHub",
+        "url": "https://github.com/1PengYuyan1"
+      }
+    ]
   },
   "posts": [],
   "essays": [],
-  "gallery": [
-    {
-      "id": "g-1795240495019",
-      "title": "晚曦",
-      "category": "生活",
-      "date": "2026-11",
-      "location": "",
-      "camera": "",
-      "src": "./assets/images/gallery-1795240466077.jpg"
-    }
-  ],
+  "gallery": [],
   "guestbook": [],
   "about": {
     "heading": "关于这里",
