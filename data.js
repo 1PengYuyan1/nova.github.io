@@ -10,7 +10,6 @@ window.SITE_DATA = {
     "heroPrefix": "忆往",
     "heroPhrases": [
       "生活",
-      "随笔",
       "心得"
     ],
     "heroSubline": "记录平淡",
