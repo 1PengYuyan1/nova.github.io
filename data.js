@@ -22,7 +22,15 @@ window.SITE_DATA = {
       },
       {
         "label": "BiliBili",
-        "url": "https://space.bilibili.com/欧萌萌--"
+        "url": "https://space.bilibili.com/1015004297?spm_id_from=333.1007.0.0"
+      },
+      {
+        "label": "LinuxDo",
+        "url": "https://linux.do/u/pengyuyan1/activity"
+      },
+      {
+        "label": "知乎",
+        "url": "https://www.zhihu.com/people/24-83-71-51-83"
       }
     ]
   },
