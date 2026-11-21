@@ -5,15 +5,15 @@ window.SITE_DATA = {
   "profile": {
     "brandName": "Nova",
     "statusBadge": "NovaLux",
-    "heroGreeting": "Welcome",
-    "heroName": "This is NovaLux space",
-    "heroPrefix": "在这里记录",
+    "heroGreeting": "Welcome to",
+    "heroName": "NovaLux space",
+    "heroPrefix": "记录",
     "heroPhrases": [
       "生活",
       "随笔",
       "心得"
     ],
-    "heroSubline": "一个平淡人的",
+    "heroSubline": "记录平淡",
     "bio": "记录思考、随笔、光影与生活的个人数字花园。",
     "email": "1209565852@qq.com",
     "socials": []
