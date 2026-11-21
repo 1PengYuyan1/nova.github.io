@@ -7,7 +7,7 @@ window.SITE_DATA = {
     "statusBadge": "NovaLux",
     "heroGreeting": "Welcome to",
     "heroName": "NovaLux space",
-    "heroPrefix": "忆往",
+    "heroPrefix": "忆",
     "heroPhrases": [
       "生活",
       "心得"
