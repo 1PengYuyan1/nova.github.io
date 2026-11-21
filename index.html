@@ -19,7 +19,7 @@
       rel="stylesheet"
     />
   </noscript>
-  <link rel="stylesheet" href="./styles.css?v=20261123" />
+  <link rel="stylesheet" href="./styles.css?v=20261124" />
   <script>
     (function () {
       const saved = localStorage.getItem('obsidian-glass-theme');
@@ -32,14 +32,8 @@
   </script>
 </head>
 <body>
-  <!-- 黑曜石流体液态光影背景 -->
-  <div class="ambient-bg" aria-hidden="true">
-    <div class="fluid-blob blob-1"></div>
-    <div class="fluid-blob blob-2"></div>
-    <div class="fluid-blob blob-3"></div>
-    <div class="fluid-blob blob-4"></div>
-    <div class="noise-layer"></div>
-  </div>
+  <!-- 黑曜石静谧氛围光场（单层 GPU 缓存，零掉帧） -->
+  <div class="ambient-bg" aria-hidden="true"></div>
 
   <!-- 悬浮透明流体毛玻璃胶囊导航栏（首页 / 博客 / 随笔 / 画廊 / 留言 / 关于） -->
   <header class="floating-nav-wrap">
@@ -182,9 +176,9 @@
 
   <div class="toast liquid-glass" id="toast" role="status" aria-live="polite"></div>
 
-  <script src="./data.js?v=20261123" defer></script>
-  <script src="./supabase-config.js?v=20261123" defer></script>
-  <script src="./admin.js?v=20261123" defer></script>
-  <script src="./app.js?v=20261123" defer></script>
+  <script src="./data.js?v=20261124" defer></script>
+  <script src="./supabase-config.js?v=20261124" defer></script>
+  <script src="./admin.js?v=20261124" defer></script>
+  <script src="./app.js?v=20261124" defer></script>
 </body>
 </html>

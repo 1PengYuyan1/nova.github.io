@@ -250,45 +250,7 @@
   }
 
   function bindGlassGlint() {
-    if (window.matchMedia && !window.matchMedia('(hover: hover) and (pointer: fine)').matches) {
-      return;
-    }
-    document.querySelectorAll('.liquid-glass.glass-interactive').forEach((el) => {
-      if (el.dataset.glintBound) return;
-      el.dataset.glintBound = '1';
-      let rect = null;
-      let rafId = null;
-      let clientX = 0;
-      let clientY = 0;
-
-      el.addEventListener('pointerenter', () => {
-        rect = el.getBoundingClientRect();
-      });
-
-      el.addEventListener('pointermove', (e) => {
-        clientX = e.clientX;
-        clientY = e.clientY;
-        if (rafId) return;
-        rafId = requestAnimationFrame(() => {
-          rafId = null;
-          if (!rect || !rect.width || !rect.height) {
-            rect = el.getBoundingClientRect();
-          }
-          const x = ((clientX - rect.left) / rect.width) * 100;
-          const y = ((clientY - rect.top) / rect.height) * 100;
-          el.style.setProperty('--mx', `${x.toFixed(1)}%`);
-          el.style.setProperty('--my', `${y.toFixed(1)}%`);
-        });
-      });
-
-      el.addEventListener('pointerleave', () => {
-        rect = null;
-        if (rafId) {
-          cancelAnimationFrame(rafId);
-          rafId = null;
-        }
-      });
-    });
+    // 悬停高光已改由纯 CSS opacity GPU 合成层实现，鼠标移动零 JS 计算、零重绘
   }
 
   /* ========================================================================
@@ -490,143 +452,39 @@
     step();
   }
 
+  function heroOrbitSVG() {
+    return `
+      <div class="hero-orbit-layer" aria-hidden="true">
+        <svg class="hero-orbit-svg" viewBox="0 0 800 520" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <g opacity="0.55">
+            <circle cx="96" cy="84" r="1.4" fill="#d6be9b" />
+            <circle cx="178" cy="142" r="1" fill="#f5f4f0" />
+            <circle cx="264" cy="68" r="1.2" fill="#f5f4f0" />
+            <circle cx="548" cy="76" r="1.5" fill="#d6be9b" />
+            <circle cx="672" cy="126" r="1.1" fill="#f5f4f0" />
+            <circle cx="718" cy="214" r="1.3" fill="#d6be9b" />
+            <circle cx="122" cy="348" r="1.2" fill="#f5f4f0" />
+            <circle cx="216" cy="436" r="1.5" fill="#d6be9b" />
+            <circle cx="612" cy="422" r="1.2" fill="#f5f4f0" />
+            <circle cx="696" cy="356" r="1.4" fill="#d6be9b" />
+            <circle cx="430" cy="52" r="1" fill="#f5f4f0" />
+            <circle cx="352" cy="468" r="1.1" fill="#d6be9b" />
+          </g>
+          <g class="hero-orbit-ring-1">
+            <ellipse cx="400" cy="260" rx="250" ry="104" transform="rotate(11 400 260)" stroke="rgba(214, 190, 155, 0.14)" stroke-width="1" />
+            <circle cx="645" cy="308" r="2.8" fill="rgba(214, 190, 155, 0.78)" />
+          </g>
+          <g class="hero-orbit-ring-2">
+            <ellipse cx="400" cy="260" rx="335" ry="178" transform="rotate(-15 400 260)" stroke="rgba(214, 190, 155, 0.085)" stroke-width="1" />
+            <circle cx="76" cy="346" r="2.6" fill="rgba(214, 190, 155, 0.62)" />
+          </g>
+        </svg>
+      </div>
+    `;
+  }
+
   function startKineticCanvas() {
-    const canvas = document.getElementById('hero-canvas');
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    const heroStage = canvas.closest('.hero-stage') || canvas;
-    let w = 0;
-    let h = 0;
-    let angle = 0;
-    let lastTime = 0;
-    let inView = true;
-    let disposed = false;
-
-    const prefersReducedMotion =
-      window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-
-    function resize() {
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      w = canvas.offsetWidth;
-      h = canvas.offsetHeight;
-      canvas.width = Math.round(w * dpr);
-      canvas.height = Math.round(h * dpr);
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      if (prefersReducedMotion) renderFrame(0);
-    }
-
-    const stars = Array.from({ length: 44 }, () => ({
-      x: Math.random(),
-      y: Math.random(),
-      r: Math.random() * 1.4 + 0.5,
-      sp: Math.random() * 0.00025 + 0.0001,
-      warm: Math.random() > 0.65,
-    }));
-
-    function renderFrame(dt) {
-      ctx.clearRect(0, 0, w, h);
-      const dark = document.documentElement.classList.contains('dark');
-      const cx = w * 0.5;
-      const cy = h * 0.5;
-      const baseR = Math.min(w, h) * 0.34;
-      angle += 0.0022 * dt;
-
-      ctx.save();
-      ctx.translate(cx, cy);
-      for (let i = 0; i < 2; i++) {
-        ctx.beginPath();
-        const rx = baseR * (1 + i * 0.36);
-        const ry = rx * (i === 0 ? 0.42 : 0.56);
-        ctx.rotate(i === 0 ? 0.18 : -0.26);
-        ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
-        ctx.strokeStyle = dark
-          ? `rgba(214, 190, 155, ${i === 0 ? 0.10 : 0.06})`
-          : `rgba(20, 20, 19, ${i === 0 ? 0.08 : 0.05})`;
-        ctx.lineWidth = 1;
-        ctx.stroke();
-
-        const px = Math.cos(angle * (i === 0 ? 1.2 : -0.85)) * rx;
-        const py = Math.sin(angle * (i === 0 ? 1.2 : -0.85)) * ry;
-        ctx.beginPath();
-        ctx.arc(px, py, 2.6, 0, Math.PI * 2);
-        ctx.fillStyle = dark ? 'rgba(214, 190, 155, 0.72)' : 'rgba(156, 126, 84, 0.7)';
-        ctx.fill();
-      }
-      ctx.restore();
-
-      for (const s of stars) {
-        s.y -= s.sp * dt;
-        if (s.y < 0) s.y = 1;
-        ctx.beginPath();
-        ctx.arc(s.x * w, s.y * h, s.r, 0, Math.PI * 2);
-        if (dark) {
-          ctx.fillStyle = s.warm ? 'rgba(214, 190, 155, 0.36)' : 'rgba(245, 244, 240, 0.24)';
-        } else {
-          ctx.fillStyle = s.warm ? 'rgba(156, 126, 84, 0.26)' : 'rgba(20, 20, 19, 0.14)';
-        }
-        ctx.fill();
-      }
-    }
-
-    function draw(now) {
-      if (disposed || !inView || document.hidden) {
-        canvasRaf = null;
-        return;
-      }
-      const dt = lastTime ? Math.min((now - lastTime) / 16.667, 3) : 1;
-      lastTime = now;
-      renderFrame(dt);
-      canvasRaf = requestAnimationFrame(draw);
-    }
-
-    function startLoop() {
-      if (disposed || prefersReducedMotion || canvasRaf || !inView || document.hidden) return;
-      lastTime = 0;
-      canvasRaf = requestAnimationFrame(draw);
-    }
-
-    function stopLoop() {
-      if (canvasRaf) {
-        cancelAnimationFrame(canvasRaf);
-        canvasRaf = null;
-      }
-    }
-
-    resize();
-    window.addEventListener('resize', resize, { passive: true });
-
-    const onVisibilityChange = () => {
-      if (document.hidden) stopLoop();
-      else startLoop();
-    };
-    document.addEventListener('visibilitychange', onVisibilityChange);
-
-    let observer = null;
-    if ('IntersectionObserver' in window) {
-      observer = new IntersectionObserver(
-        (entries) => {
-          inView = Boolean(entries[0] && entries[0].isIntersecting);
-          if (inView) startLoop();
-          else stopLoop();
-        },
-        { threshold: 0.01 }
-      );
-      observer.observe(heroStage);
-    }
-
-    canvasCleanup = () => {
-      disposed = true;
-      stopLoop();
-      window.removeEventListener('resize', resize);
-      document.removeEventListener('visibilitychange', onVisibilityChange);
-      if (observer) observer.disconnect();
-    };
-
-    if (prefersReducedMotion) {
-      renderFrame(0);
-    } else {
-      startLoop();
-    }
+    // 开屏轨道已改由零主线程开销的纯矢量 SVG + GPU transform 合成，无需每帧重绘 Canvas
   }
 
   /* ========================================================================
@@ -693,7 +551,7 @@
     appMain.innerHTML = `
       <!-- 第一屏：100vh 居中大气开屏 -->
       <section class="hero-stage">
-        <canvas class="hero-canvas" id="hero-canvas"></canvas>
+        ${heroOrbitSVG()}
 
         <div class="hero-center">
           <span class="status-pill">
